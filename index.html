@@ -40,6 +40,15 @@
   .seg button.active{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
   .tabs{margin-left:auto}
   .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:18px}
+  .bench{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 22px;margin-bottom:18px;display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  .bench .big{font-size:36px;font-weight:800;letter-spacing:-1px;line-height:1}
+  .bench .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-soft);font-weight:700}
+  .bench .meta{color:var(--ink-soft);font-size:12.5px;margin-top:4px}
+  .bench .track{flex:1 1 220px;height:12px;border-radius:6px;background:#eef1f4;overflow:visible;min-width:160px;position:relative}
+  .bench .track i{display:block;height:100%;border-radius:6px}
+  .bench .track .mark{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
+  .bench .track .markL{position:absolute;top:-20px;font-size:10px;font-weight:700;color:var(--ink);transform:translateX(-50%)}
+  .bench .spill{padding:7px 16px;border-radius:22px;font-weight:800;font-size:13px}
   .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 16px;position:relative;overflow:hidden}
   .kpi .dot{width:9px;height:9px;border-radius:50%;position:absolute;top:16px;right:16px}
   .kpi .label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:700}
@@ -111,7 +120,6 @@
       <div class="field"><label>Group</label><select id="fGroup"><option value="ALL">All Groups</option></select></div>
       <div class="field"><label>Agent</label><select id="fAgent"><option value="ALL">All Agents</option></select></div>
       <div class="field"><label>Day</label><select id="fDate"><option value="ALL">All Days</option></select></div>
-      <div class="field"><label>Active % target</label><input class="num" id="fTarget" type="number" min="0" max="100" value="40"></div>
       <div class="field"><label>Values</label>
         <div class="seg" id="modeSeg">
           <button data-mode="total" class="active">Totals</button>
@@ -127,6 +135,8 @@
         </div>
       </div>
     </div>
+
+    <div class="bench" id="bench"></div>
 
     <div class="kpis" id="kpis"></div>
 
@@ -152,20 +162,20 @@
 
     <div class="grid2">
       <div class="panel">
-        <h3>Active % Trend by Day</h3>
-        <p class="hint">Active % = (Handling + Wrap Up) ÷ Logged In. Dashed line is your target.</p>
+        <h3>Productive % Trend by Day</h3>
+        <p class="hint">Productive % = (In Call + Available) ÷ hours worked. Dashed line is the 80% target.</p>
         <div class="chart-wrap sm"><canvas id="trendChart"></canvas></div>
       </div>
       <div class="panel">
         <h3>Needs Attention</h3>
-        <p class="hint" id="watchHint">Agents below the Active % target for the current selection.</p>
+        <p class="hint" id="watchHint">Agents below the 80% Productive target for the current selection.</p>
         <div class="tablescroll sm"><table id="watchTbl"><thead></thead><tbody></tbody></table></div>
       </div>
     </div>
   </div>
 
   <footer>
-    TSS Agent Time On Status · Times shown in the report time zone · Active % = (Handling + Wrap Up) ÷ Logged In<br>
+    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (In Call + Available) ÷ (Logged In − On Break) · Target 80%<br>
     <span id="srcNote"></span>
   </footer>
 </div>
@@ -184,6 +194,8 @@ const STATUSES = [
   {key:"onbreak",   label:"On Break",        col:"On Break Time",         hex:"#ef4444"},
 ];
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
+const TARGET = 80;  // Productive % benchmark (locked). Productive = In Call (Handling) + Available; hours worked = Logged In - On Break
+const PROD_HEX = "#0f7a3d";
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 
 let RECORDS = [], VIEW="day", MODE="total", SORT={col:null,dir:-1}, mainChart, mixChart, trendChart;
@@ -324,7 +336,9 @@ function aggregate(recs,dim){
     const div=MODE==="avg"?Math.max(1,o.dates.size):1;
     const res={key:o.key,loggedin:o.loggedin/div,dates:o.dates.size,agents:o.agents.size};
     STATUSES.forEach(s=>res[s.key]=o[s.key]/div);
-    res.util=res.loggedin?((res.handling+res.wrapup)/res.loggedin*100):0;
+    const worked=res.loggedin-res.onbreak;               // hours worked = logged in minus break/lunch
+    res.worked=worked;
+    res.util=worked>0?((res.available+res.handling)/worked*100):0;  // Productive % = (Available + In Call) / worked
     return res;
   });
   arr.sort((a,b)=>dim==="date"?a.key.localeCompare(b.key):b.loggedin-a.loggedin);
@@ -337,6 +351,7 @@ function render(){
   const recs=currentFilter();
   const dim={day:"date",agent:"agent",group:"group",week:"week"}[VIEW];
   const agg=aggregate(recs,dim);
+  renderBench(recs);
   renderKPIs(recs);
   renderMain(agg,dim);
   renderMix(recs);
@@ -344,6 +359,27 @@ function render(){
   renderTable(agg,dim);
   renderWatch(recs);
   status(`${recs.length.toLocaleString()} records · ${new Set(recs.map(r=>r.agent)).size} agents · ${new Set(recs.map(r=>r.date)).size} days`);
+}
+function renderBench(recs){
+  let prod=0, worked=0;
+  recs.forEach(r=>{ prod += r.available + r.handling; worked += (r.loggedin - r.onbreak); });
+  const pct = worked>0 ? prod/worked*100 : 0;
+  const meets = pct>=TARGET;
+  const barColor = meets ? PROD_HEX : "#c0392b";
+  const pillBg = meets ? "#e6f5ec" : "#fdecec";
+  const pillFg = meets ? "#1e7a45" : "#c0392b";
+  $("bench").innerHTML=`
+    <div>
+      <div class="lbl">Productive %</div>
+      <div class="big" style="color:${barColor}">${fmtPct(pct)}</div>
+      <div class="meta">(In Call + Available) ÷ (Logged In − On Break) · Target 80%</div>
+    </div>
+    <div class="track">
+      <i style="width:${Math.min(100,pct)}%;background:${barColor}"></i>
+      <div class="mark" style="left:${TARGET}%"></div>
+      <div class="markL" style="left:${TARGET}%">80%</div>
+    </div>
+    <div class="spill" style="background:${pillBg};color:${pillFg}">${meets?"Meeting target":"Below target"}</div>`;
 }
 function renderKPIs(recs){
   const days=new Set(recs.map(r=>r.date)).size||1;
@@ -389,19 +425,19 @@ function renderMix(recs){
 function renderTrend(){
   const recs=currentFilter(false);                   // ignore day filter to show full trend
   const byDay=new Map();
-  recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,act:0}; o.login+=r.loggedin; o.act+=r.handling+r.wrapup; byDay.set(r.date,o);});
+  recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,prod:0,brk:0}; o.login+=r.loggedin; o.prod+=r.available+r.handling; o.brk+=r.onbreak; byDay.set(r.date,o);});
   const labels=[...byDay.keys()].sort();
-  const util=labels.map(d=>{const o=byDay.get(d); return o.login?+(o.act/o.login*100).toFixed(1):0;});
+  const util=labels.map(d=>{const o=byDay.get(d); const w=o.login-o.brk; return w>0?+(o.prod/w*100).toFixed(1):0;});
   const login=labels.map(d=>+byDay.get(d).login.toFixed(1));
-  const target=+val("fTarget")||0;
+  const target=TARGET;
   trendChart&&trendChart.destroy();
   trendChart=new Chart($("trendChart"),{data:{labels,datasets:[
-    {type:"line",label:"Active %",data:util,yAxisID:"y",borderColor:"#2f6df6",backgroundColor:"#2f6df6",tension:.3,fill:false,pointRadius:3},
-    {type:"line",label:"Target",data:labels.map(()=>target),yAxisID:"y",borderColor:"#94a3b8",borderDash:[6,5],pointRadius:0,fill:false},
+    {type:"line",label:"Productive %",data:util,yAxisID:"y",borderColor:PROD_HEX,backgroundColor:PROD_HEX,tension:.3,fill:false,pointRadius:3},
+    {type:"line",label:"Target 80%",data:labels.map(()=>target),yAxisID:"y",borderColor:"#94a3b8",borderDash:[6,5],pointRadius:0,fill:false},
     {type:"bar",label:"Logged In hrs",data:login,yAxisID:"y1",backgroundColor:"rgba(15,23,42,.10)",borderRadius:3}
   ]},options:{maintainAspectRatio:false,responsive:true,interaction:{mode:"index",intersect:false},
     scales:{x:{grid:{display:false},ticks:{maxRotation:60,autoSkip:true}},
-      y:{position:"left",beginAtZero:true,title:{display:true,text:"Active %"},grid:{color:"#eef1f4"},ticks:{callback:v=>v+"%"}},
+      y:{position:"left",beginAtZero:true,max:100,title:{display:true,text:"Productive %"},grid:{color:"#eef1f4"},ticks:{callback:v=>v+"%"}},
       y1:{position:"right",beginAtZero:true,title:{display:true,text:"Logged In hrs"},grid:{display:false}}},
     plugins:{legend:{position:"bottom",labels:{usePointStyle:true,boxWidth:8,padding:12}},
       tooltip:{callbacks:{label:c=>c.dataset.yAxisID==="y"?`${c.dataset.label}: ${c.parsed.y}%`:`${c.dataset.label}: ${fmtHrs(c.parsed.y)} hrs`}}}}});
@@ -411,7 +447,7 @@ function renderTable(agg,dim){
   $("tableTitle").textContent={date:"Daily Detail",agent:"Agent Detail",group:"Group Detail",week:"Weekly Detail"}[dim];
   $("tableHint").textContent=(MODE==="avg"?"Avg hours/day per status":"Hours per status")+" with % of Logged In. Click a header to sort.";
   const q=val("search").trim().toLowerCase();
-  const cols=[{k:"key",l:dimName},{k:"loggedin",l:"Logged In"}].concat(STATUSES.map(s=>({k:s.key,l:s.label}))).concat([{k:"util",l:"Active %"}]);
+  const cols=[{k:"key",l:dimName},{k:"loggedin",l:"Logged In"}].concat(STATUSES.map(s=>({k:s.key,l:s.label}))).concat([{k:"util",l:"Productive %"}]);
   const thead=document.querySelector("#tbl thead");
   thead.innerHTML="<tr>"+cols.map(c=>`<th data-k="${c.k}">${c.l}</th>`).join("")+"</tr>";
   thead.querySelectorAll("th").forEach(th=>th.onclick=()=>{const k=th.dataset.k;SORT.dir=SORT.col===k?-SORT.dir:-1;SORT.col=k;render();});
@@ -419,7 +455,7 @@ function renderTable(agg,dim){
   if(SORT.col) rows=[...rows].sort((a,b)=>SORT.col==="key"?SORT.dir*String(a.key).localeCompare(String(b.key)):SORT.dir*(a[SORT.col]-b[SORT.col]));
   const cellPct=(v,base)=>base?`<span style="color:var(--ink-soft)"> (${fmtPct(v/base*100)})</span>`:"";
   const tb=document.querySelector("#tbl tbody");
-  const target=+val("fTarget")||0;
+  const target=TARGET;
   tb.innerHTML=rows.map(o=>`<tr>
     <td>${o.key}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
     ${STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}${cellPct(o[s.key],o.loggedin)}</td>`).join("")}
@@ -427,16 +463,16 @@ function renderTable(agg,dim){
     || `<tr><td colspan="${cols.length}" class="empty">No rows match.</td></tr>`;
   const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
   rows.forEach(o=>{t.loggedin+=o.loggedin;STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
-  const tu=t.loggedin?((t.handling+t.wrapup)/t.loggedin*100):0;
+  const tworked=t.loggedin-t.onbreak; const tu=tworked>0?((t.available+t.handling)/tworked*100):0;
   if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length})</td><td>${fmtHrs(t.loggedin)}</td>
     ${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
 }
 function renderWatch(recs){
-  const target=+val("fTarget")||0;
-  const agg=aggregate(recs,"agent").filter(o=>o.loggedin>0 && o.util<target).sort((a,b)=>a.util-b.util);
-  $("watchHint").textContent=`Agents below ${target}% Active for the current selection (${agg.length}).`;
+  const target=TARGET;
+  const agg=aggregate(recs,"agent").filter(o=>o.worked>0 && o.util<target).sort((a,b)=>a.util-b.util);
+  $("watchHint").textContent=`Agents below ${target}% Productive for the current selection (${agg.length}).`;
   const thead=document.querySelector("#watchTbl thead");
-  thead.innerHTML="<tr><th>Agent</th><th>Active %</th><th>Logged In</th><th>Offline</th><th>Break</th></tr>";
+  thead.innerHTML="<tr><th>Agent</th><th>Productive %</th><th>Logged In</th><th>Offline</th><th>Break</th></tr>";
   const tb=document.querySelector("#watchTbl tbody");
   tb.innerHTML=agg.length?agg.map(o=>`<tr><td>${o.key}</td>
     <td><span class="pill" style="background:#fdecec;color:#c0392b">${fmtPct(o.util)}</span></td>
@@ -480,7 +516,6 @@ function fail(msg){
 function handleFile(f){ const rd=new FileReader(); rd.onload=e=>loadBuffer(e.target.result,f.name); rd.readAsArrayBuffer(f); }
 
 ["fWeek","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
-$("fTarget").addEventListener("input",render);
 $("search").addEventListener("input",render);
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("active"));b.classList.add("active");VIEW=b.dataset.view;SORT={col:null,dir:-1};render();});
