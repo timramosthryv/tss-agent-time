@@ -174,6 +174,13 @@
         <div class="tablescroll sm"><table id="watchTbl"><thead></thead><tbody></tbody></table></div>
       </div>
     </div>
+
+    <div class="panel" id="agentPanel">
+      <div class="phead">
+        <div><h3 id="agentDetailTitle">Agent Daily Detail</h3><p class="hint" id="agentDetailHint">Pick a single agent in the Agent filter above to see their day-by-day breakdown.</p></div>
+      </div>
+      <div class="tablescroll"><table id="agentTbl"><thead></thead><tbody></tbody></table></div>
+    </div>
   </div>
 
   <footer>
@@ -367,6 +374,7 @@ function render(){
   renderTrend();
   renderTable(agg,dim);
   renderWatch(recs);
+  renderAgentDaily();
   status(`${recs.length.toLocaleString()} records · ${new Set(recs.map(r=>r.agent)).size} agents · ${new Set(recs.map(r=>r.date)).size} days`);
 }
 function renderBench(recs){
@@ -475,6 +483,43 @@ function renderTable(agg,dim){
   const tworked=t.loggedin-t.onbreak; const tu=tworked>0?((t.available+t.handling)/tworked*100):0;
   if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length})</td><td>${fmtHrs(t.loggedin)}</td>
     ${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
+}
+function renderAgentDaily(){
+  const a=val("fAgent");
+  const thead=document.querySelector("#agentTbl thead");
+  const tb=document.querySelector("#agentTbl tbody");
+  if(a==="ALL"){
+    $("agentDetailTitle").textContent="Agent Daily Detail";
+    $("agentDetailHint").textContent="Pick a single agent in the Agent filter above to see their day-by-day breakdown.";
+    thead.innerHTML=""; tb.innerHTML=`<tr><td class="empty">No agent selected.</td></tr>`; return;
+  }
+  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
+  const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
+  $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
+  $("agentDetailHint").textContent=`Each day for ${a}. Available % and Handling % are shares of Logged In. Productive % = (In Call + Available) ÷ (Logged In − On Break).`;
+  const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Working Offline","On Break","Productive %"];
+  thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
+  const byDay=new Map();
+  recs.forEach(r=>{ if(!byDay.has(r.date)) byDay.set(r.date,{date:r.date,loggedin:0,available:0,handling:0,wrapup:0,offline:0,onbreak:0});
+    const o=byDay.get(r.date); o.loggedin+=r.loggedin;o.available+=r.available;o.handling+=r.handling;o.wrapup+=r.wrapup;o.offline+=r.offline;o.onbreak+=r.onbreak; });
+  const rows=[...byDay.values()].sort((x,y)=>x.date.localeCompare(y.date));
+  const pctOf=(v,base)=>base>0?fmtPct(v/base*100):"—";
+  const prodPct=o=>{const wk=o.loggedin-o.onbreak;return wk>0?(o.available+o.handling)/wk*100:0;};
+  tb.innerHTML=rows.map(o=>{const pp=prodPct(o);return `<tr>
+    <td>${o.date}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
+    <td>${fmtHrs(o.available)}</td><td>${pctOf(o.available,o.loggedin)}</td>
+    <td>${fmtHrs(o.handling)}</td><td>${pctOf(o.handling,o.loggedin)}</td>
+    <td>${fmtHrs(o.wrapup)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td>
+    <td><span class="pill" style="background:${pp>=TARGET?'#e6f5ec':'#fdecec'};color:${pp>=TARGET?'#1e7a45':'#c0392b'}">${fmtPct(pp)}</span></td></tr>`;}).join("")
+    || `<tr><td colspan="${cols.length}" class="empty">No days for this agent in the current selection.</td></tr>`;
+  const t={loggedin:0,available:0,handling:0,wrapup:0,offline:0,onbreak:0};
+  rows.forEach(o=>{for(const k in t)t[k]+=o[k];});
+  const tp=prodPct(t);
+  if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length} days)</td><td>${fmtHrs(t.loggedin)}</td>
+    <td>${fmtHrs(t.available)}</td><td>${pctOf(t.available,t.loggedin)}</td>
+    <td>${fmtHrs(t.handling)}</td><td>${pctOf(t.handling,t.loggedin)}</td>
+    <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
+    <td>${fmtPct(tp)}</td></tr>`;
 }
 function renderWatch(recs){
   const target=TARGET;
