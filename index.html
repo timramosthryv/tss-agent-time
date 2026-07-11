@@ -289,7 +289,7 @@ async function loadFromGitHub(){
   files.forEach(f=>f._gen=parseGen(f.name)||0);
   files.sort((a,b)=>b._gen-a._gen);                  // newest first
   status(`Loading ${files.length} file(s)…`);
-  const bufs=await Promise.all(files.map(f=>fetch(f.download_url,{cache:"no-store"}).then(r=>r.arrayBuffer())));
+  const bufs=await Promise.all(files.map(f=>fetch(f.download_url+(f.download_url.includes("?")?"&":"?")+"t="+Date.now(),{cache:"no-store"}).then(r=>r.arrayBuffer())));
   mergeFiles(files.map((f,i)=>({name:f.name,buf:bufs[i]})));
   const newest=files[0].name;
   $("srcNote").textContent=`Auto-loaded ${RECORDS.length} records from ${files.length} file(s) in /${GH.path} · latest: ${newest}`;
@@ -586,7 +586,7 @@ drop.addEventListener("click",()=>$("file").click());
 drop.addEventListener("drop",e=>{if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);});
 
 function fetchLastUpdated(){
-  fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/commits?path=${encodeURIComponent(ROOT_FALLBACK)}&per_page=1`,{cache:"no-store",headers:{Accept:"application/vnd.github+json"}})
+  fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/commits?path=${encodeURIComponent(ROOT_FALLBACK)}&per_page=1&t=${Date.now()}`,{cache:"no-store",headers:{Accept:"application/vnd.github+json"}})
     .then(r=>r.ok?r.json():null)
     .then(a=>{ if(a&&a[0]&&a[0].commit){ const d=new Date(a[0].commit.committer.date);
       $("updated").textContent="● Data last updated "+d.toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}); } })
@@ -597,7 +597,7 @@ async function boot(){
   fetchLastUpdated();
   try{ await loadFromGitHub(); return; }catch(e){ /* try root fallback */ }
   try{
-    const r=await fetch(ROOT_FALLBACK,{cache:"no-store"}); if(!r.ok) throw 0;
+    const r=await fetch(ROOT_FALLBACK+"?t="+Date.now(),{cache:"no-store"}); if(!r.ok) throw 0;
     loadBuffer(await r.arrayBuffer(), ROOT_FALLBACK);
     $("srcNote").textContent=`Auto-loaded from ${ROOT_FALLBACK}`;
   }catch(e){
