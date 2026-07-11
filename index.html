@@ -233,7 +233,12 @@ function toHours(v){
 }
 const cleanGroup = g => String(g||"").replace(/^ThryvService_TSS_/,"").replace(/_/g," ").trim();
 const fmtDate = d => d.toISOString().slice(0,10);
-const fmtHrs = h => (Math.round(h*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtHrs = h => {                                  // decimal hours -> H:MM:SS, matching the 8x8 report
+  if(h==null||isNaN(h)) return "0:00:00";
+  const neg=h<0, tot=Math.round(Math.abs(h)*3600);
+  const hh=Math.floor(tot/3600), mm=Math.floor((tot%3600)/60), ss=tot%60;
+  return (neg?"-":"")+hh+":"+String(mm).padStart(2,"0")+":"+String(ss).padStart(2,"0");
+};
 const fmtPct = p => isFinite(p)?(Math.round(p*10)/10).toFixed(1)+"%":"—";
 function status(t){ $("status").textContent=t; }
 
@@ -409,7 +414,7 @@ function renderKPIs(recs){
   const tot={loggedin:0}; STATUSES.forEach(s=>tot[s.key]=0);
   recs.forEach(r=>{tot.loggedin+=r.loggedin; STATUSES.forEach(s=>tot[s.key]+=r[s.key]);});
   const suffix=MODE==="avg"?"avg hrs/day":"total hrs";
-  const cards=[kpiCard(LOGIN.label,fmtHrs(tot.loggedin/div),(MODE==="avg"?"avg hrs/day logged in":"total hrs logged in"),LOGIN.hex,100)];
+  const cards=[kpiCard(LOGIN.label,fmtHrs(tot.loggedin/div),(MODE==="avg"?"avg time/day logged in":"total time logged in"),LOGIN.hex,100)];
   STATUSES.forEach(s=>{
     const pct=tot.loggedin?tot[s.key]/tot.loggedin*100:0;
     cards.push(kpiCard(s.label,fmtHrs(tot[s.key]/div),fmtPct(pct)+" of logged in",s.hex,pct));
@@ -467,7 +472,7 @@ function renderTrend(){
 function renderTable(agg,dim){
   const dimName={date:"Day",agent:"Agent",group:"Group",week:"Week"}[dim];
   $("tableTitle").textContent={date:"Daily Detail",agent:"Agent Detail",group:"Group Detail",week:"Weekly Detail"}[dim];
-  $("tableHint").textContent=(MODE==="avg"?"Avg hours/day per status":"Hours per status")+" with % of Logged In. Click a header to sort.";
+  $("tableHint").textContent=(MODE==="avg"?"Avg time/day per status (h:mm:ss)":"Time per status (h:mm:ss)")+" with % of Logged In. Click a header to sort.";
   const q=val("search").trim().toLowerCase();
   const cols=[{k:"key",l:dimName},{k:"loggedin",l:"Logged In"}].concat(STATUSES.map(s=>({k:s.key,l:s.label}))).concat([{k:"util",l:"Productive %"}]);
   const thead=document.querySelector("#tbl thead");
@@ -552,10 +557,10 @@ function exportExcel(){
   const recs=currentFilter();
   const dim={day:"date",agent:"agent",group:"group",week:"week"}[VIEW];
   const agg=aggregate(recs,dim);
-  const head=[{date:"Day",agent:"Agent",group:"Group",week:"Week"}[dim],"Logged In (hrs)"]
-    .concat(STATUSES.map(s=>s.label+" (hrs)"),STATUSES.map(s=>s.label+" %"),["Active %"]);
-  const body=agg.map(o=>{const row=[o.key,+o.loggedin.toFixed(2)];
-    STATUSES.forEach(s=>row.push(+o[s.key].toFixed(2)));
+  const head=[{date:"Day",agent:"Agent",group:"Group",week:"Week"}[dim],"Logged In"]
+    .concat(STATUSES.map(s=>s.label),STATUSES.map(s=>s.label+" %"),["Productive %"]);
+  const body=agg.map(o=>{const row=[o.key,fmtHrs(o.loggedin)];
+    STATUSES.forEach(s=>row.push(fmtHrs(o[s.key])));
     STATUSES.forEach(s=>row.push(o.loggedin?+(o[s.key]/o.loggedin*100).toFixed(1):0));
     row.push(+o.util.toFixed(1)); return row;});
   const ws=XLSX.utils.aoa_to_sheet([head,...body]);
