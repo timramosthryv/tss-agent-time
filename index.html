@@ -75,6 +75,10 @@
   .tablescroll{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:12px}
   .tablescroll.sm{max-height:360px}
   .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
+  .agentstats{display:flex;gap:10px;flex-wrap:wrap}
+  .chip{background:#f4f6f8;border:1px solid var(--line);border-radius:10px;padding:8px 15px;text-align:center;min-width:96px}
+  .chip .n{font-size:20px;font-weight:800;line-height:1;letter-spacing:-.5px}
+  .chip .t{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:700;margin-top:4px}
   .drop{border:2px dashed #cdd5df;border-radius:var(--radius);background:var(--card);padding:44px 20px;text-align:center;color:var(--ink-soft);cursor:pointer;transition:.15s}
   .drop:hover,.drop.drag{border-color:var(--brand);background:#fff7f3;color:var(--brand-dark)}
   .drop .ic{font-size:34px}.drop b{color:var(--ink)}
@@ -178,6 +182,7 @@
     <div class="panel" id="agentPanel">
       <div class="phead">
         <div><h3 id="agentDetailTitle">Agent Daily Detail</h3><p class="hint" id="agentDetailHint">Pick a single agent in the Agent filter above to see their day-by-day breakdown.</p></div>
+        <div class="agentstats" id="agentStats"></div>
       </div>
       <div class="tablescroll"><table id="agentTbl"><thead></thead><tbody></tbody></table></div>
     </div>
@@ -491,12 +496,13 @@ function renderAgentDaily(){
   if(a==="ALL"){
     $("agentDetailTitle").textContent="Agent Daily Detail";
     $("agentDetailHint").textContent="Pick a single agent in the Agent filter above to see their day-by-day breakdown.";
+    $("agentStats").innerHTML="";
     thead.innerHTML=""; tb.innerHTML=`<tr><td class="empty">No agent selected.</td></tr>`; return;
   }
   const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
   const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
   $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
-  $("agentDetailHint").textContent=`Each day for ${a}. Available % and Handling % are shares of Logged In. Productive % = (In Call + Available) ÷ (Logged In − On Break).`;
+  $("agentDetailHint").textContent=`Each day ${a} logged in. Days with no login are not shown and do not count against the Productive % average.`;
   const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Working Offline","On Break","Productive %"];
   thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const byDay=new Map();
@@ -520,6 +526,13 @@ function renderAgentDaily(){
     <td>${fmtHrs(t.handling)}</td><td>${pctOf(t.handling,t.loggedin)}</td>
     <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
     <td>${fmtPct(tp)}</td></tr>`;
+  const daysWorked=rows.filter(o=>o.loggedin>0).length;
+  const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.date)).size;
+  const attend=periodDays?daysWorked/periodDays*100:0;
+  $("agentStats").innerHTML=`
+    <div class="chip"><div class="n">${daysWorked} / ${periodDays}</div><div class="t">Days Logged In</div></div>
+    <div class="chip"><div class="n">${fmtPct(attend)}</div><div class="t">Attendance</div></div>
+    <div class="chip"><div class="n" style="color:${tp>=TARGET?'#1e7a45':'#c0392b'}">${fmtPct(tp)}</div><div class="t">Productive %</div></div>`;
 }
 function renderWatch(recs){
   const target=TARGET;
