@@ -301,7 +301,7 @@ async function loadFromGitHub(){
   status(`Loading ${files.length} file(s)…`);
   const bufs=await Promise.all(files.map(f=>fetch(f.download_url+(f.download_url.includes("?")?"&":"?")+"t="+Date.now(),{cache:"no-store"}).then(r=>r.arrayBuffer())));
   mergeFiles(files.map((f,i)=>({name:f.name,buf:bufs[i]})));
-  const newest=files[0].name;
+  const newest=files[0].name; if(files[0]._gen){const _d=new Date(files[0]._gen); $("updated").textContent="* Data last updated "+_d.toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"});}
   $("srcNote").textContent=`Auto-loaded ${RECORDS.length} records from ${files.length} file(s) in /${GH.path} · latest: ${newest}`;
   status(`Loaded · latest file ${parsePeriod(newest)||newest}`);
 }
