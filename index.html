@@ -35,6 +35,7 @@
   select,input.num,input.search{appearance:none;border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:13px;font-weight:600;color:var(--ink);background:#fff}
   select{padding-right:30px;background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%235b6470'/></svg>") no-repeat right 11px center;min-width:140px;cursor:pointer}
   input.num{width:78px}
+  select[multiple]{min-width:150px;height:76px;padding:6px 8px;background-image:none;font-weight:500}
   select:focus,input:focus{outline:none;border-color:var(--brand)}
   .seg{display:inline-flex;background:#eef1f4;border-radius:10px;padding:4px}
   .seg button{border:none;background:transparent;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:.15s}
@@ -122,10 +123,12 @@
   <div id="dashView" class="hide">
     <div class="toolbar">
       <div class="field"><label>Week</label><select id="fWeek"><option value="ALL">All Weeks</option></select></div>
+      <div class="field"><label>Quarter</label><select id="fQuarter"><option value="ALL">All Quarters</option></select></div>
+      <div class="field"><label>Month</label><select id="fMonth"><option value="ALL">All Months</option></select></div>
       <div class="field"><label>Location</label><select id="fLoc"><option value="ALL">All Locations</option></select></div>
       <div class="field"><label>Group</label><select id="fGroup"><option value="ALL">All Groups</option></select></div>
       <div class="field"><label>Agent</label><select id="fAgent"><option value="ALL">All Agents</option></select></div>
-      <div class="field"><label>Day</label><select id="fDate"><option value="ALL">All Days</option></select></div>
+      <div class="field"><label>Day <span style="font-weight:400;text-transform:none;letter-spacing:0">(ctrl/cmd-click for multiple)</span></label><select id="fDate" multiple><option value="ALL" selected>All Days</option></select></div>
       <div class="field"><label>Values</label>
         <div class="seg" id="modeSeg">
           <button data-mode="total" class="active">Totals</button>
@@ -313,34 +316,45 @@ function mergeFiles(list){
     recs.forEach(r=>{
       const k=r.date+"|"+r.agent+"|"+(r.id||r.agent)+"|"+r.group;
       if(seen.has(k)) return; seen.add(k);
-      r.week=period||weekLabelFor(r.date); r.file=f.name; out.push(r);
+      r.week=period||weekLabelFor(r.date); r.month=monthLabel(r.date); r.quarter=quarterLabel(r.date); r.file=f.name; out.push(r);
     });
   });
   if(!out.length) throw new Error("No records parsed from repo files.");
   RECORDS=out; showDashboard();
 }
 function weekLabelFor(dateStr){ return dateStr; }
+function monthLabel(dateStr){ const p=dateStr.split("-"); const names=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return names[+p[1]-1]+" "+p[0]; }
+function quarterLabel(dateStr){ const p=dateStr.split("-"); const q=Math.floor((+p[1]-1)/3)+1; return "Q"+q+" "+p[0]; }
 
 /* ============ FILTERS ============ */
 function currentFilter(includeDate=true){
-  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent"),d=val("fDate");
+  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent");
+  const m=val("fMonth"),q=val("fQuarter");
+  const days=[...document.querySelectorAll("#fDate option:checked")].map(o=>o.value).filter(v=>v!=="ALL");
   return RECORDS.filter(r=>
     (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&
     (g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
-    (!includeDate||d==="ALL"||r.date===d));
+    (m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q)&&
+    (!includeDate||days.length===0||days.includes(r.date)));
 }
 function populateFilters(){
   fill("fWeek","All Weeks",uniq("week"),true);
   fill("fLoc","All Locations",uniq("location"));
   fill("fGroup","All Groups",uniq("group"));
   fill("fAgent","All Agents",scopedAgents());
-  fill("fDate","All Days",uniq("date"));
+  fill("fQuarter","All Quarters",quartersSorted());
+  fill("fMonth","All Months",monthsSorted());
+  fillDates();
   // hide Week/By-Week when single week
   const single=uniq("week").length<=1;
   $("fWeek").closest(".field").classList.toggle("hide",single);
   document.querySelector('#viewSeg [data-view="week"]').classList.toggle("hide",single);
 }
-const uniq = key => [...new Set(RECORDS.map(r=>r[key]))].sort(); function scopedAgents(){ const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"); return [...new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.agent))].sort(); }
+const uniq = key => [...new Set(RECORDS.map(r=>r[key]))].sort();
+function scopedAgents(){ const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),m=val("fMonth"),q=val("fQuarter"); return [...new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q)).map(r=>r.agent))].sort(); }
+function monthsSorted(){ const map=new Map(); RECORDS.forEach(r=>{ if(!map.has(r.month)) map.set(r.month,r.date); }); return [...map.keys()].sort((a,b)=>map.get(a).localeCompare(map.get(b))); }
+function quartersSorted(){ const map=new Map(); RECORDS.forEach(r=>{ if(!map.has(r.quarter)) map.set(r.quarter,r.date); }); return [...map.keys()].sort((a,b)=>map.get(a).localeCompare(map.get(b))); }
+function fillDates(){ const sel=$("fDate"); const cur=[...sel.selectedOptions].map(o=>o.value); const arr=uniq("date"); sel.innerHTML=`<option value="ALL">All Days</option>`+arr.map(v=>`<option value="${v}">${v}</option>`).join(""); let any=false; [...sel.options].forEach(o=>{ if(cur.includes(o.value)){ o.selected=true; any=true; } }); if(!any) sel.options[0].selected=true; }
 function fill(id,allLabel,arr,keepFirst){
   const sel=$(id), cur=sel.value;
   sel.innerHTML=`<option value="ALL">${allLabel}</option>`+arr.map(v=>`<option value="${v}">${v}</option>`).join("");
@@ -504,8 +518,8 @@ function renderAgentDaily(){
     $("agentStats").innerHTML="";
     thead.innerHTML=""; tb.innerHTML=`<tr><td class="empty">No agent selected.</td></tr>`; return;
   }
-  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
-  const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
+  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),m=val("fMonth"),q=val("fQuarter");
+  const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q));
   $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
   $("agentDetailHint").textContent=`Each day ${a} logged in. Days with no login are not shown and do not count against the Productive % average.`;
   const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Working Offline","On Break","Productive %"];
@@ -532,7 +546,7 @@ function renderAgentDaily(){
     <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
     <td>${fmtPct(tp)}</td></tr>`;
   const daysWorked=rows.filter(o=>o.loggedin>0).length;
-  const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.date)).size;
+  const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q)).map(r=>r.date)).size;
   const attend=periodDays?daysWorked/periodDays*100:0;
   $("agentStats").innerHTML=`
     <div class="chip"><div class="n">${daysWorked} / ${periodDays}</div><div class="t">Days Logged In</div></div>
@@ -587,7 +601,7 @@ function fail(msg){
 }
 function handleFile(f){ const rd=new FileReader(); rd.onload=e=>loadBuffer(e.target.result,f.name); rd.readAsArrayBuffer(f); }
 
-["fWeek","fLoc","fGroup"].forEach(id=>$(id).addEventListener("change",()=>fill("fAgent","All Agents",scopedAgents()))); ["fWeek","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
+["fWeek","fLoc","fGroup","fMonth","fQuarter"].forEach(id=>$(id).addEventListener("change",()=>{fill("fAgent","All Agents",scopedAgents());fillDates();})); ["fWeek","fLoc","fGroup","fAgent","fDate","fMonth","fQuarter"].forEach(id=>$(id).addEventListener("change",render));
 $("search").addEventListener("input",render);
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("active"));b.classList.add("active");VIEW=b.dataset.view;SORT={col:null,dir:-1};render();});
