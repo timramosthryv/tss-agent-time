@@ -311,7 +311,7 @@ function mergeFiles(list){
     const period=parsePeriod(f.name);
     let recs; try{recs=parseWorkbook(f.buf);}catch(e){return;}
     recs.forEach(r=>{
-      const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
+      const k=r.date+"|"+r.agent+"|"+(r.id||r.agent)+"|"+r.group;
       if(seen.has(k)) return; seen.add(k);
       r.week=period||weekLabelFor(r.date); r.file=f.name; out.push(r);
     });
