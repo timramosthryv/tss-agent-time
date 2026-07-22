@@ -333,14 +333,14 @@ function populateFilters(){
   fill("fWeek","All Weeks",uniq("week"),true);
   fill("fLoc","All Locations",uniq("location"));
   fill("fGroup","All Groups",uniq("group"));
-  fill("fAgent","All Agents",uniq("agent"));
+  fill("fAgent","All Agents",scopedAgents());
   fill("fDate","All Days",uniq("date"));
   // hide Week/By-Week when single week
   const single=uniq("week").length<=1;
   $("fWeek").closest(".field").classList.toggle("hide",single);
   document.querySelector('#viewSeg [data-view="week"]').classList.toggle("hide",single);
 }
-const uniq = key => [...new Set(RECORDS.map(r=>r[key]))].sort();
+const uniq = key => [...new Set(RECORDS.map(r=>r[key]))].sort(); function scopedAgents(){ const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"); return [...new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.agent))].sort(); }
 function fill(id,allLabel,arr,keepFirst){
   const sel=$(id), cur=sel.value;
   sel.innerHTML=`<option value="ALL">${allLabel}</option>`+arr.map(v=>`<option value="${v}">${v}</option>`).join("");
@@ -587,7 +587,7 @@ function fail(msg){
 }
 function handleFile(f){ const rd=new FileReader(); rd.onload=e=>loadBuffer(e.target.result,f.name); rd.readAsArrayBuffer(f); }
 
-["fWeek","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
+["fWeek","fLoc","fGroup"].forEach(id=>$(id).addEventListener("change",()=>fill("fAgent","All Agents",scopedAgents()))); ["fWeek","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
 $("search").addEventListener("input",render);
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("active"));b.classList.add("active");VIEW=b.dataset.view;SORT={col:null,dir:-1};render();});
