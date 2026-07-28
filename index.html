@@ -276,6 +276,14 @@ function parsePeriod(name){
   if(m) return `${m[1]} ${m[2]} – ${m[3]} ${m[4]}`;
   return null;
 }
+/* group key for cumulative snapshots: report name + reporting-period START (ignores the generation timestamp).
+   Lets us keep only the newest export per report+period, so anyone removed from the latest file drops off
+   instead of lingering in older overlapping snapshots. */
+function seriesKey(name){
+  const rep=(name.match(/^(.*?)_[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{1,2}[_:]\d{2}/)||[])[1] || name.replace(/\.[^.]+$/,"");
+  const per=(name.match(/,\s*([A-Z][a-z]{2}\s+\d{1,2}\s+\d{4})\s*-/)||[])[1] || "";
+  return rep.trim()+"|"+per.trim();
+}
 
 /* ============ PARSE WORKBOOK ============ */
 function parseDateCell(c0){                            // supports .xlsx (Excel serial/Date) and strings (ISO or M/D/YYYY)
@@ -342,6 +350,12 @@ async function loadFromGitHub(){
   let files=(await res.json()).filter(f=>f.type==="file" && /\.xlsx?$/i.test(f.name));
   if(!files.length) throw new Error("No .xlsx files in the data folder.");
   files.forEach(f=>f._gen=parseGen(f.name)||0);
+  // Reports are cumulative month-to-date snapshots, so older files for the same period are stale.
+  // Keep only the newest export per report+period; this way an agent removed from the latest file
+  // no longer reappears from an earlier snapshot.
+  const bySeries=new Map();
+  files.forEach(f=>{ const k=seriesKey(f.name); const cur=bySeries.get(k); if(!cur||f._gen>cur._gen) bySeries.set(k,f); });
+  files=[...bySeries.values()];
   files.sort((a,b)=>b._gen-a._gen);                  // newest first
   status(`Loading ${files.length} file(s)…`);
   const bufs=await Promise.all(files.map(f=>fetch(f.download_url+(f.download_url.includes("?")?"&":"?")+"t="+Date.now(),{cache:"no-store"}).then(r=>r.arrayBuffer())));
