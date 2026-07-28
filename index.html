@@ -40,7 +40,7 @@
   .seg button{border:none;background:transparent;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:.15s}
   .seg button.active{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
   .tabs{margin-left:auto}
-  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:18px}
+  .kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:14px;margin-bottom:18px}
   .bench{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 22px;margin-bottom:18px;display:flex;align-items:center;gap:22px;flex-wrap:wrap}
   .bench .big{font-size:36px;font-weight:800;letter-spacing:-1px;line-height:1}
   .bench .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-soft);font-weight:700}
@@ -197,7 +197,7 @@
   </div>
 
   <footer>
-    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (In Call + Available) ÷ (Logged In − On Break) · Target 80%<br>
+    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (In Call + Available + Thryv Projects) ÷ (Logged In − On Break) · Target 80%<br>
     <span id="srcNote"></span>
   </footer>
 </div>
@@ -212,6 +212,7 @@ const STATUSES = [
   {key:"available", label:"Available",       col:"Available Time",        hex:"#2e9e5b"},
   {key:"handling",  label:"Handling",        col:"Handling Time",         hex:"#2f6df6"},
   {key:"wrapup",    label:"Wrap Up",         col:"Wrap Up Time",          hex:"#8b5cf6"},
+  {key:"projects",  label:"Thryv Projects",  col:null,                    hex:"#0d9488", productive:true},  // special projects – filled from the exception report, counts toward the 80% target
   {key:"offline",   label:"Working Offline", col:"Working Offline Time",  hex:"#f59e0b"},
   {key:"onbreak",   label:"On Break",        col:"On Break Time",         hex:"#ef4444"},
 ];
@@ -223,6 +224,8 @@ const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:
 
 let RECORDS = [], VIEW="day", MODE="total", SORT={col:null,dir:-1}, mainChart, mixChart, trendChart;
 let BREAK_SORT = {col:"date", dir:1};   // Extended Breaks default: day (oldest first), then longest break
+let PROJECT_STATS = null;               // summary of Thryv Projects exception rows applied to the data
+const projectNote = () => PROJECT_STATS && PROJECT_STATS.rows ? ` · Thryv Projects exception applied: ${PROJECT_STATS.credited} agent-days credited as productive` : "";
 const $ = id => document.getElementById(id);
 const val = id => $(id).value;
 
@@ -266,37 +269,59 @@ function parsePeriod(name){
 }
 
 /* ============ PARSE WORKBOOK ============ */
+function parseDateCell(c0){                            // supports .xlsx (Excel serial/Date) and strings (ISO or M/D/YYYY)
+  if(c0 instanceof Date && !isNaN(c0)) return fmtDate(c0);
+  if(typeof c0==="number") return fmtDate(new Date(Date.UTC(1899,11,30)+c0*864e5));
+  if(typeof c0==="string"){
+    const s=c0.trim(); let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if(m) return `${m[3]}-${String(m[1]).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`;
+  }
+  return null;
+}
 function parseWorkbook(buf){
-  const wb=XLSX.read(buf,{type:"array"});           // numeric durations, timezone-safe
+  const wb=XLSX.read(buf,{type:"array"});             // numeric durations, timezone-safe
   const ws=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,blankrows:false});
   const hi=rows.findIndex(r=>r&&r.some(c=>String(c).trim()==="Start Time"));
   if(hi<0) throw new Error("Could not find the 'Start Time' header row.");
   const head=rows[hi].map(c=>String(c).trim());
   const idx=n=>head.indexOf(n);
-  const iDate=idx("Start Time"), iGroup=idx("Group"), iAgent=idx("Agent"), iId=idx("Agent Id");
+  // Two 8x8 report shapes are supported:
+  //   MAIN "Agent Time On Status"        -> has "Logged In Time" plus a column per status
+  //   EXCEPTION "Agent Status By Status Code" -> long format with "Status Code Item" + a single "Time" column
+  if(idx("Status Code Item")>=0 && idx("Logged In Time")<0) return {kind:"projects", rows:parseProjects(rows,hi,idx)};
+  return {kind:"main", rows:parseMain(rows,hi,idx)};
+}
+function parseMain(rows,hi,idx){
+  const iDate=idx("Start Time"), iGroup=idx("Group"), iAgent=idx("Agent");
   const recs=[];
   for(let r=hi+1;r<rows.length;r++){
     const row=rows[r]; if(!row||!row.length) continue;
-    const c0=row[iDate];
-    let dateStr=null;                                 // supports .xlsx (Excel serial/Date) and .csv (ISO or M/D/YYYY string)
-    if(c0 instanceof Date && !isNaN(c0)) dateStr=fmtDate(c0);
-    else if(typeof c0==="number") dateStr=fmtDate(new Date(Date.UTC(1899,11,30)+c0*864e5));
-    else if(typeof c0==="string"){
-      const s=c0.trim(); let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if(m) dateStr=`${m[1]}-${m[2]}-${m[3]}`;
-      else { m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) dateStr=`${m[3]}-${String(m[1]).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`; }
-    }
+    const dateStr=parseDateCell(row[iDate]);
     if(!dateStr) continue;                            // skips metadata / Subtotal / Total / header rows
     const agent=String(row[iAgent]||"").trim(); if(!agent) continue;
     const grp=cleanGroup(row[iGroup]);
-    const rec={date:dateStr, group:grp, location:(grp.split(" ")[0]||"—"), agent, id:String(row[iId]||"").trim()};
-    STATUSES.forEach(s=>rec[s.key]=toHours(row[idx(s.col)]));
+    const rec={date:dateStr, group:grp, location:(grp.split(" ")[0]||"—"), agent, id:String(row[idx("Agent Id")]||"").trim()};
+    STATUSES.forEach(s=>rec[s.key]= s.col ? toHours(row[idx(s.col)]) : 0);   // projects has no column here – filled from the exception report
     rec.loggedin=toHours(row[idx(LOGIN.col)]);
     recs.push(rec);
   }
   if(!recs.length) throw new Error("No agent rows found in this file.");
   return recs;
+}
+function parseProjects(rows,hi,idx){
+  const iDate=idx("Start Time"), iAgent=idx("Agent"), iId=idx("Agent Id"), iItem=idx("Status Code Item"), iTime=idx("Time");
+  const out=[];
+  for(let r=hi+1;r<rows.length;r++){
+    const row=rows[r]; if(!row||!row.length) continue;
+    const dateStr=parseDateCell(row[iDate]); if(!dateStr) continue;         // skips Group/Date Subtotal + Total rows
+    if(String(row[iItem]||"").trim().toLowerCase()!=="thryv projects") continue;  // only the special-projects code counts
+    const agent=String(row[iAgent]||"").trim(); if(!agent) continue;
+    out.push({date:dateStr, agent, id:String(row[iId]||"").trim(), hours:toHours(row[iTime])});
+  }
+  return out;
 }
 
 /* ============ LOADERS ============ */
@@ -312,22 +337,44 @@ async function loadFromGitHub(){
   const bufs=await Promise.all(files.map(f=>fetch(f.download_url+(f.download_url.includes("?")?"&":"?")+"t="+Date.now(),{cache:"no-store"}).then(r=>r.arrayBuffer())));
   mergeFiles(files.map((f,i)=>({name:f.name,buf:bufs[i]})));
   const newest=files[0].name;
-  $("srcNote").textContent=`Auto-loaded ${RECORDS.length} records from ${files.length} file(s) in /${GH.path} · latest: ${newest}`;
+  $("srcNote").textContent=`Auto-loaded ${RECORDS.length} records from ${files.length} file(s) in /${GH.path} · latest: ${newest}`+projectNote();
   status(`Loaded · latest file ${parsePeriod(newest)||newest}`);
 }
 function mergeFiles(list){
-  const seen=new Set(); const out=[];
+  const seen=new Set(); const out=[]; const projectRows=[];
   list.forEach(f=>{
+    let parsed; try{parsed=parseWorkbook(f.buf);}catch(e){return;}
+    if(parsed.kind==="projects"){ projectRows.push(...parsed.rows); return; }  // exception report – applied after main records
     const period=parsePeriod(f.name);
-    let recs; try{recs=parseWorkbook(f.buf);}catch(e){return;}
-    recs.forEach(r=>{
+    parsed.rows.forEach(r=>{
       const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
       if(seen.has(k)) return; seen.add(k);
       r.week=period||weekLabelFor(r.date); r.file=f.name; out.push(r);
     });
   });
-  if(!out.length) throw new Error("No records parsed from repo files.");
-  RECORDS=out; showDashboard();
+  if(!out.length){
+    if(projectRows.length) throw new Error("This looks like the Thryv Projects exception report. Load it alongside the main Agent Time export.");
+    throw new Error("No records parsed from repo files.");
+  }
+  RECORDS=out;
+  applyProjects(projectRows);
+  showDashboard();
+}
+function applyProjects(projectRows){
+  PROJECT_STATS=null;
+  if(!projectRows||!projectRows.length) return;
+  const byKey=new Map();                              // sum Thryv Projects hours per agent-day
+  projectRows.forEach(p=>{ const k=p.date+"|"+p.agent; byKey.set(k,(byKey.get(k)||0)+p.hours); });
+  let credited=0;
+  RECORDS.forEach(r=>{
+    const h=byKey.get(r.date+"|"+r.agent);
+    if(h>0){
+      r.projects=h;
+      r.offline=Math.max(0, r.offline - h);           // Thryv Projects logs under Working Offline in 8x8 – move it out so it is not counted twice
+      credited++;
+    }
+  });
+  PROJECT_STATS={rows:projectRows.length, credited, agents:new Set(projectRows.map(p=>p.agent)).size};
 }
 function weekLabelFor(dateStr){ return dateStr; }
 
@@ -374,7 +421,7 @@ function aggregate(recs,dim){
     STATUSES.forEach(s=>res[s.key]=o[s.key]/div);
     const worked=res.loggedin-res.onbreak;               // hours worked = logged in minus break/lunch
     res.worked=worked;
-    res.util=worked>0?((res.available+res.handling)/worked*100):0;  // Productive % = (Available + In Call) / worked
+    res.util=worked>0?((res.available+res.handling+res.projects)/worked*100):0;  // Productive % = (Available + In Call + Thryv Projects) / worked
     return res;
   });
   arr.sort((a,b)=>dim==="date"?a.key.localeCompare(b.key):b.loggedin-a.loggedin);
@@ -400,7 +447,7 @@ function render(){
 }
 function renderBench(recs){
   let prod=0, worked=0;
-  recs.forEach(r=>{ prod += r.available + r.handling; worked += (r.loggedin - r.onbreak); });
+  recs.forEach(r=>{ prod += r.available + r.handling + r.projects; worked += (r.loggedin - r.onbreak); });
   const pct = worked>0 ? prod/worked*100 : 0;
   const meets = pct>=TARGET;
   const barColor = meets ? PROD_HEX : "#c0392b";
@@ -410,7 +457,7 @@ function renderBench(recs){
     <div>
       <div class="lbl">Productive %</div>
       <div class="big" style="color:${barColor}">${fmtPct(pct)}</div>
-      <div class="meta">(In Call + Available) ÷ (Logged In − On Break) · Target 80%</div>
+      <div class="meta">(In Call + Available + Thryv Projects) ÷ (Logged In − On Break) · Target 80%</div>
     </div>
     <div class="track">
       <i style="width:${Math.min(100,pct)}%;background:${barColor}"></i>
@@ -463,7 +510,7 @@ function renderMix(recs){
 function renderTrend(){
   const recs=currentFilter(false);                   // ignore day filter to show full trend
   const byDay=new Map();
-  recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,prod:0,brk:0}; o.login+=r.loggedin; o.prod+=r.available+r.handling; o.brk+=r.onbreak; byDay.set(r.date,o);});
+  recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,prod:0,brk:0}; o.login+=r.loggedin; o.prod+=r.available+r.handling+r.projects; o.brk+=r.onbreak; byDay.set(r.date,o);});
   const labels=[...byDay.keys()].sort();
   const util=labels.map(d=>{const o=byDay.get(d); const w=o.login-o.brk; return w>0?+(o.prod/w*100).toFixed(1):0;});
   const login=labels.map(d=>+byDay.get(d).login.toFixed(1));
@@ -501,7 +548,7 @@ function renderTable(agg,dim){
     || `<tr><td colspan="${cols.length}" class="empty">No rows match.</td></tr>`;
   const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
   rows.forEach(o=>{t.loggedin+=o.loggedin;STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
-  const tworked=t.loggedin-t.onbreak; const tu=tworked>0?((t.available+t.handling)/tworked*100):0;
+  const tworked=t.loggedin-t.onbreak; const tu=tworked>0?((t.available+t.handling+t.projects)/tworked*100):0;
   if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length})</td><td>${fmtHrs(t.loggedin)}</td>
     ${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
 }
@@ -519,28 +566,28 @@ function renderAgentDaily(){
   const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
   $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
   $("agentDetailHint").textContent=`Each day ${a} logged in. Days with no login are not shown and do not count against the Productive % average.`;
-  const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Working Offline","On Break","Productive %"];
+  const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Thryv Projects","Working Offline","On Break","Productive %"];
   thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const byDay=new Map();
-  recs.forEach(r=>{ if(!byDay.has(r.date)) byDay.set(r.date,{date:r.date,loggedin:0,available:0,handling:0,wrapup:0,offline:0,onbreak:0});
-    const o=byDay.get(r.date); o.loggedin+=r.loggedin;o.available+=r.available;o.handling+=r.handling;o.wrapup+=r.wrapup;o.offline+=r.offline;o.onbreak+=r.onbreak; });
+  recs.forEach(r=>{ if(!byDay.has(r.date)) byDay.set(r.date,{date:r.date,loggedin:0,available:0,handling:0,wrapup:0,projects:0,offline:0,onbreak:0});
+    const o=byDay.get(r.date); o.loggedin+=r.loggedin;o.available+=r.available;o.handling+=r.handling;o.wrapup+=r.wrapup;o.projects+=r.projects;o.offline+=r.offline;o.onbreak+=r.onbreak; });
   const rows=[...byDay.values()].sort((x,y)=>x.date.localeCompare(y.date));
   const pctOf=(v,base)=>base>0?fmtPct(v/base*100):"—";
-  const prodPct=o=>{const wk=o.loggedin-o.onbreak;return wk>0?(o.available+o.handling)/wk*100:0;};
+  const prodPct=o=>{const wk=o.loggedin-o.onbreak;return wk>0?(o.available+o.handling+o.projects)/wk*100:0;};
   tb.innerHTML=rows.map(o=>{const pp=prodPct(o);return `<tr>
     <td>${o.date}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
     <td>${fmtHrs(o.available)}</td><td>${pctOf(o.available,o.loggedin)}</td>
     <td>${fmtHrs(o.handling)}</td><td>${pctOf(o.handling,o.loggedin)}</td>
-    <td>${fmtHrs(o.wrapup)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td>
+    <td>${fmtHrs(o.wrapup)}</td><td>${fmtHrs(o.projects)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td>
     <td><span class="pill" style="background:${pp>=TARGET?'#e6f5ec':'#fdecec'};color:${pp>=TARGET?'#1e7a45':'#c0392b'}">${fmtPct(pp)}</span></td></tr>`;}).join("")
     || `<tr><td colspan="${cols.length}" class="empty">No days for this agent in the current selection.</td></tr>`;
-  const t={loggedin:0,available:0,handling:0,wrapup:0,offline:0,onbreak:0};
+  const t={loggedin:0,available:0,handling:0,wrapup:0,projects:0,offline:0,onbreak:0};
   rows.forEach(o=>{for(const k in t)t[k]+=o[k];});
   const tp=prodPct(t);
   if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length} days)</td><td>${fmtHrs(t.loggedin)}</td>
     <td>${fmtHrs(t.available)}</td><td>${pctOf(t.available,t.loggedin)}</td>
     <td>${fmtHrs(t.handling)}</td><td>${pctOf(t.handling,t.loggedin)}</td>
-    <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
+    <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.projects)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
     <td>${fmtPct(tp)}</td></tr>`;
   const daysWorked=rows.filter(o=>o.loggedin>0).length;
   const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.date)).size;
@@ -635,7 +682,7 @@ function showDashboard(){
 }
 function loadBuffer(buf,name){
   try{ mergeFiles([{name:name||"upload.xlsx",buf}]);
-    $("srcNote").textContent=`Loaded from manual upload: ${name||""}`;
+    $("srcNote").textContent=`Loaded from manual upload: ${name||""}`+projectNote();
     status("Loaded "+(name||"file"));
   }catch(e){ fail(e.message); }
 }
