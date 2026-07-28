@@ -35,6 +35,8 @@
   select,input.num,input.search{appearance:none;border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:13px;font-weight:600;color:var(--ink);background:#fff}
   select{padding-right:30px;background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%235b6470'/></svg>") no-repeat right 11px center;min-width:140px;cursor:pointer}
   input.num{width:78px}
+  select[multiple]{background-image:none;padding:5px 6px;min-width:150px;height:74px;overflow:auto}
+  select[multiple] option{padding:3px 7px;border-radius:6px}
   select:focus,input:focus{outline:none;border-color:var(--brand)}
   .seg{display:inline-flex;background:#eef1f4;border-radius:10px;padding:4px}
   .seg button{border:none;background:transparent;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:.15s}
@@ -63,7 +65,7 @@
   .panel .hint{color:var(--ink-soft);font-size:12px;margin:0 0 14px}
   .chart-wrap{position:relative;height:340px}
   .chart-wrap.sm{height:300px}
-  .grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:18px}
+  .grid2{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:18px}
   table{width:100%;border-collapse:collapse;font-size:12.5px}
   th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
@@ -122,10 +124,12 @@
   <div id="dashView" class="hide">
     <div class="toolbar">
       <div class="field"><label>Week</label><select id="fWeek"><option value="ALL">All Weeks</option></select></div>
+      <div class="field"><label>Quarter</label><select id="fQuarter"><option value="ALL">All Quarters</option></select></div>
+      <div class="field"><label>Month</label><select id="fMonth"><option value="ALL">All Months</option></select></div>
       <div class="field"><label>Location</label><select id="fLoc"><option value="ALL">All Locations</option></select></div>
       <div class="field"><label>Group</label><select id="fGroup"><option value="ALL">All Groups</option></select></div>
       <div class="field"><label>Agent</label><select id="fAgent"><option value="ALL">All Agents</option></select></div>
-      <div class="field"><label>Day</label><select id="fDate"><option value="ALL">All Days</option></select></div>
+      <div class="field"><label>Day (ctrl/cmd-click for multiple)</label><select id="fDate" multiple><option value="ALL">All Days</option></select></div>
       <div class="field"><label>Values</label>
         <div class="seg" id="modeSeg">
           <button data-mode="total" class="active">Totals</button>
@@ -268,6 +272,12 @@ const fmtHrs = h => {                                  // decimal hours -> H:MM:
 };
 const fmtPct = p => isFinite(p)?(Math.round(p*10)/10).toFixed(1)+"%":"—";
 function status(t){ $("status").textContent=t; }
+/* month / quarter derived from a YYYY-MM-DD date */
+const MONTH_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const monthOf = d => d.slice(0,7);                                   // "2026-07"
+const monthLabel = m => { const p=m.split("-"); return (MONTH_ABBR[(+p[1])-1]||p[1])+" "+p[0]; };  // "Jul 2026"
+const quarterOf = d => d.slice(0,4)+"-Q"+Math.ceil((+d.slice(5,7))/3);                              // "2026-Q3"
+const quarterLabel = q => { const p=q.split("-Q"); return "Q"+p[1]+" "+p[0]; };                     // "Q3 2026"
 
 /* parse "Jul 10 2026 13_56" generation stamp from filename -> ms (for newest-first) */
 function parseGen(name){
@@ -406,19 +416,26 @@ function applyProjects(exRows){
 function weekLabelFor(dateStr){ return dateStr; }
 
 /* ============ FILTERS ============ */
+function selectedDays(){                                 // null = all days; otherwise a Set of chosen dates
+  const vals=[...$("fDate").selectedOptions].map(o=>o.value);
+  return (!vals.length||vals.includes("ALL")) ? null : new Set(vals);
+}
 function currentFilter(includeDate=true){
-  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent"),d=val("fDate");
+  const w=val("fWeek"),q=val("fQuarter"),m=val("fMonth"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent");
+  const days=includeDate?selectedDays():null;
   return RECORDS.filter(r=>
-    (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&
-    (g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
-    (!includeDate||d==="ALL"||r.date===d));
+    (w==="ALL"||r.week===w)&&(q==="ALL"||quarterOf(r.date)===q)&&(m==="ALL"||monthOf(r.date)===m)&&
+    (l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
+    (!days||days.has(r.date)));
 }
 function populateFilters(){
   fill("fWeek","All Weeks",uniq("week"),true);
+  fillOpts("fQuarter","All Quarters",[...new Set(RECORDS.map(r=>quarterOf(r.date)))].sort(),quarterLabel);
+  fillOpts("fMonth","All Months",[...new Set(RECORDS.map(r=>monthOf(r.date)))].sort(),monthLabel);
   fill("fLoc","All Locations",uniq("location"));
   fill("fGroup","All Groups",uniq("group"));
   fill("fAgent","All Agents",uniq("agent"));
-  fill("fDate","All Days",uniq("date"));
+  fillDays();
   // hide Week/By-Week when single week
   const single=uniq("week").length<=1;
   $("fWeek").closest(".field").classList.toggle("hide",single);
@@ -429,6 +446,19 @@ function fill(id,allLabel,arr,keepFirst){
   const sel=$(id), cur=sel.value;
   sel.innerHTML=`<option value="ALL">${allLabel}</option>`+arr.map(v=>`<option value="${v}">${v}</option>`).join("");
   if([...sel.options].some(o=>o.value===cur)) sel.value=cur;
+}
+function fillOpts(id,allLabel,arr,labelFn){                 // value != label (e.g. sortable key -> friendly label)
+  const sel=$(id), cur=sel.value;
+  sel.innerHTML=`<option value="ALL">${allLabel}</option>`+arr.map(v=>`<option value="${v}">${labelFn?labelFn(v):v}</option>`).join("");
+  if([...sel.options].some(o=>o.value===cur)) sel.value=cur;
+}
+function fillDays(){                                         // multi-select day list; preserves selection, defaults to All Days
+  const sel=$("fDate");
+  const cur=new Set([...sel.selectedOptions].map(o=>o.value));
+  sel.innerHTML=`<option value="ALL">All Days</option>`+uniq("date").map(d=>`<option value="${d}">${d}</option>`).join("");
+  let any=false;
+  [...sel.options].forEach(o=>{ o.selected=cur.has(o.value); if(o.selected) any=true; });
+  if(!any) sel.options[0].selected=true;
 }
 
 /* ============ AGGREGATION ============ */
@@ -719,7 +749,7 @@ function fail(msg){
 }
 function handleFile(f){ const rd=new FileReader(); rd.onload=e=>loadBuffer(e.target.result,f.name); rd.readAsArrayBuffer(f); }
 
-["fWeek","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
+["fWeek","fQuarter","fMonth","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
 $("search").addEventListener("input",render);
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("active"));b.classList.add("active");VIEW=b.dataset.view;SORT={col:null,dir:-1};render();});
