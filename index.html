@@ -433,8 +433,8 @@ function populateFilters(){
   fillOpts("fQuarter","All Quarters",[...new Set(RECORDS.map(r=>quarterOf(r.date)))].sort(),quarterLabel);
   fillOpts("fMonth","All Months",[...new Set(RECORDS.map(r=>monthOf(r.date)))].sort(),monthLabel);
   fill("fLoc","All Locations",uniq("location"));
-  fill("fGroup","All Groups",uniq("group"));
-  fill("fAgent","All Agents",uniq("agent"));
+  refreshGroups();
+  refreshAgents();
   fillDays();
   // hide Week/By-Week when single week
   const single=uniq("week").length<=1;
@@ -459,6 +459,21 @@ function fillDays(){                                         // multi-select day
   let any=false;
   [...sel.options].forEach(o=>{ o.selected=cur.has(o.value); if(o.selected) any=true; });
   if(!any) sel.options[0].selected=true;
+}
+/* cascading dropdowns: Group is scoped to the chosen Location; Agent to the chosen Location + Group */
+function refreshGroups(){
+  const l=val("fLoc");
+  const groups=[...new Set(RECORDS.filter(r=>l==="ALL"||r.location===l).map(r=>r.group))].sort();
+  const sel=$("fGroup"), cur=sel.value;
+  sel.innerHTML=`<option value="ALL">All Groups</option>`+groups.map(v=>`<option value="${v}">${v}</option>`).join("");
+  sel.value = groups.includes(cur) ? cur : "ALL";
+}
+function refreshAgents(){
+  const l=val("fLoc"), g=val("fGroup");
+  const agents=[...new Set(RECORDS.filter(r=>(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.agent))].sort();
+  const sel=$("fAgent"), cur=sel.value;
+  sel.innerHTML=`<option value="ALL">All Agents</option>`+agents.map(v=>`<option value="${v}">${v}</option>`).join("");
+  sel.value = agents.includes(cur) ? cur : "ALL";
 }
 
 /* ============ AGGREGATION ============ */
@@ -749,7 +764,9 @@ function fail(msg){
 }
 function handleFile(f){ const rd=new FileReader(); rd.onload=e=>loadBuffer(e.target.result,f.name); rd.readAsArrayBuffer(f); }
 
-["fWeek","fQuarter","fMonth","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
+["fWeek","fQuarter","fMonth","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
+$("fLoc").addEventListener("change",()=>{ refreshGroups(); refreshAgents(); render(); });
+$("fGroup").addEventListener("change",()=>{ refreshAgents(); render(); });
 $("search").addEventListener("input",render);
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("active"));b.classList.add("active");VIEW=b.dataset.view;SORT={col:null,dir:-1};render();});
