@@ -222,6 +222,7 @@ const PROD_HEX = "#0f7a3d";
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 
 let RECORDS = [], VIEW="day", MODE="total", SORT={col:null,dir:-1}, mainChart, mixChart, trendChart;
+let BREAK_SORT = {col:"date", dir:1};   // Extended Breaks default: day (oldest first), then longest break
 const $ = id => document.getElementById(id);
 const val = id => $(id).value;
 
@@ -561,23 +562,39 @@ function renderWatch(recs){
     <td>${fmtHrs(o.loggedin)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td></tr>`).join("")
     :`<tr><td colspan="5" class="empty">Everyone is at or above target 🎯</td></tr>`;
 }
+function breakSortVal(r,col){
+  if(col==="onbreak"||col==="loggedin") return r[col];
+  if(col==="brkpct") return r.loggedin>0?r.onbreak/r.loggedin:0;
+  return String(r[col]||"");
+}
 function renderBreaks(recs){
   // Flag each agent-day where On Break time is over the daily limit. Uses the filtered
   // record set, so Week / Location / Group / Agent / Day toggles all apply automatically.
-  const flagged=recs.filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>b.onbreak-a.onbreak);
-  $("breaksHint").textContent=`Agent days where On Break time exceeded ${fmtHrs(BREAK_LIMIT)}, for the current selection (${flagged.length}).`;
+  const {col,dir}=BREAK_SORT;
+  const flagged=recs.filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>{
+    const va=breakSortVal(a,col), vb=breakSortVal(b,col);
+    const primary = typeof va==="number" ? dir*(va-vb) : dir*va.localeCompare(vb);
+    return primary || a.date.localeCompare(b.date) || (b.onbreak-a.onbreak);  // tie-break: day, then longest break
+  });
+  $("breaksHint").textContent=`Agent days where On Break time exceeded ${fmtHrs(BREAK_LIMIT)}, for the current selection (${flagged.length}). Ordered by day, then longest break. Click a header to re-sort.`;
   const people=new Set(flagged.map(r=>r.agent)).size;
-  const worst=flagged.length?fmtHrs(flagged[0].onbreak):"0:00:00";
+  const worst=flagged.length?fmtHrs(Math.max(...flagged.map(r=>r.onbreak))):"0:00:00";
   $("breaksStats").innerHTML=`
     <div class="chip"><div class="n" style="color:#c0392b">${flagged.length}</div><div class="t">Days over ${fmtHrs(BREAK_LIMIT)}</div></div>
     <div class="chip"><div class="n">${people}</div><div class="t">Agents</div></div>
     <div class="chip"><div class="n">${worst}</div><div class="t">Longest break</div></div>`;
-  const cols=["Agent","Day","Group","On Break","Logged In","Break % of Logged In"];
+  const cols=[{k:"date",l:"Day"},{k:"agent",l:"Agent"},{k:"group",l:"Group"},{k:"onbreak",l:"On Break"},{k:"loggedin",l:"Logged In"},{k:"brkpct",l:"Break % of Logged In"}];
+  const arrow=k=>BREAK_SORT.col===k?(BREAK_SORT.dir===1?" ▲":" ▼"):"";
   const thead=document.querySelector("#breaksTbl thead");
-  thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
+  thead.innerHTML="<tr>"+cols.map(c=>`<th data-k="${c.k}">${c.l}${arrow(c.k)}</th>`).join("")+"</tr>";
+  thead.querySelectorAll("th").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    BREAK_SORT.dir = BREAK_SORT.col===k ? -BREAK_SORT.dir : (k==="date"?1:-1);  // dates default oldest-first, numbers highest-first
+    BREAK_SORT.col=k; render();
+  });
   const tb=document.querySelector("#breaksTbl tbody");
   tb.innerHTML=flagged.length?flagged.map(r=>`<tr>
-    <td>${r.agent}</td><td>${r.date}</td><td>${r.group}</td>
+    <td>${r.date}</td><td>${r.agent}</td><td>${r.group}</td>
     <td><span class="pill" style="background:#fdecec;color:#c0392b">${fmtHrs(r.onbreak)}</span></td>
     <td>${fmtHrs(r.loggedin)}</td>
     <td>${r.loggedin>0?fmtPct(r.onbreak/r.loggedin*100):"—"}</td></tr>`).join("")
@@ -600,9 +617,9 @@ function exportExcel(){
   XLSX.utils.book_append_sheet(wb,ws,"By "+dim);
 
   // Extended Breaks tab: every agent-day over the daily limit in the current selection
-  const brk=currentFilter().filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>b.onbreak-a.onbreak);
-  const brkHead=["Agent","Day","Group","On Break","Logged In","Break % of Logged In"];
-  const brkBody=brk.map(r=>[r.agent,r.date,r.group,fmtHrs(r.onbreak),fmtHrs(r.loggedin),
+  const brk=currentFilter().filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>a.date.localeCompare(b.date)||b.onbreak-a.onbreak);
+  const brkHead=["Day","Agent","Group","On Break","Logged In","Break % of Logged In"];
+  const brkBody=brk.map(r=>[r.date,r.agent,r.group,fmtHrs(r.onbreak),fmtHrs(r.loggedin),
     r.loggedin>0?+(r.onbreak/r.loggedin*100).toFixed(1):0]);
   const wsB=XLSX.utils.aoa_to_sheet([brkHead,...brkBody]);
   XLSX.utils.book_append_sheet(wb,wsB,"Extended Breaks");
