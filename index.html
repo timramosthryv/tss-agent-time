@@ -35,7 +35,6 @@
   select,input.num,input.search{appearance:none;border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:13px;font-weight:600;color:var(--ink);background:#fff}
   select{padding-right:30px;background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%235b6470'/></svg>") no-repeat right 11px center;min-width:140px;cursor:pointer}
   input.num{width:78px}
-  select[multiple]{min-width:150px;height:76px;padding:6px 8px;background-image:none;font-weight:500}
   select:focus,input:focus{outline:none;border-color:var(--brand)}
   .seg{display:inline-flex;background:#eef1f4;border-radius:10px;padding:4px}
   .seg button{border:none;background:transparent;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:.15s}
@@ -123,12 +122,10 @@
   <div id="dashView" class="hide">
     <div class="toolbar">
       <div class="field"><label>Week</label><select id="fWeek"><option value="ALL">All Weeks</option></select></div>
-      <div class="field"><label>Quarter</label><select id="fQuarter"><option value="ALL">All Quarters</option></select></div>
-      <div class="field"><label>Month</label><select id="fMonth"><option value="ALL">All Months</option></select></div>
       <div class="field"><label>Location</label><select id="fLoc"><option value="ALL">All Locations</option></select></div>
       <div class="field"><label>Group</label><select id="fGroup"><option value="ALL">All Groups</option></select></div>
       <div class="field"><label>Agent</label><select id="fAgent"><option value="ALL">All Agents</option></select></div>
-      <div class="field"><label>Day <span style="font-weight:400;text-transform:none;letter-spacing:0">(ctrl/cmd-click for multiple)</span></label><select id="fDate" multiple><option value="ALL" selected>All Days</option></select></div>
+      <div class="field"><label>Day</label><select id="fDate"><option value="ALL">All Days</option></select></div>
       <div class="field"><label>Values</label>
         <div class="seg" id="modeSeg">
           <button data-mode="total" class="active">Totals</button>
@@ -182,6 +179,14 @@
       </div>
     </div>
 
+    <div class="panel" id="breaksPanel">
+      <div class="phead">
+        <div><h3 id="breaksTitle">Extended Breaks</h3><p class="hint" id="breaksHint">Agent days where On Break time exceeded 1.5 hours, for the current selection.</p></div>
+        <div class="agentstats" id="breaksStats"></div>
+      </div>
+      <div class="tablescroll sm"><table id="breaksTbl"><thead></thead><tbody></tbody></table></div>
+    </div>
+
     <div class="panel" id="agentPanel">
       <div class="phead">
         <div><h3 id="agentDetailTitle">Agent Daily Detail</h3><p class="hint" id="agentDetailHint">Pick a single agent in the Agent filter above to see their day-by-day breakdown.</p></div>
@@ -212,6 +217,7 @@ const STATUSES = [
 ];
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
 const TARGET = 80;  // Productive % benchmark (locked). Productive = In Call (Handling) + Available; hours worked = Logged In - On Break
+const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
 const PROD_HEX = "#0f7a3d";
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 
@@ -304,7 +310,7 @@ async function loadFromGitHub(){
   status(`Loading ${files.length} file(s)…`);
   const bufs=await Promise.all(files.map(f=>fetch(f.download_url+(f.download_url.includes("?")?"&":"?")+"t="+Date.now(),{cache:"no-store"}).then(r=>r.arrayBuffer())));
   mergeFiles(files.map((f,i)=>({name:f.name,buf:bufs[i]})));
-  const newest=files[0].name; if(files[0]._gen){const _d=new Date(files[0]._gen); $("updated").textContent="* Data last updated "+_d.toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"});}
+  const newest=files[0].name;
   $("srcNote").textContent=`Auto-loaded ${RECORDS.length} records from ${files.length} file(s) in /${GH.path} · latest: ${newest}`;
   status(`Loaded · latest file ${parsePeriod(newest)||newest}`);
 }
@@ -314,47 +320,36 @@ function mergeFiles(list){
     const period=parsePeriod(f.name);
     let recs; try{recs=parseWorkbook(f.buf);}catch(e){return;}
     recs.forEach(r=>{
-      const k=r.date+"|"+r.agent+"|"+(r.id||r.agent)+"|"+r.group;
+      const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
       if(seen.has(k)) return; seen.add(k);
-      r.week=period||weekLabelFor(r.date); r.month=monthLabel(r.date); r.quarter=quarterLabel(r.date); r.file=f.name; out.push(r);
+      r.week=period||weekLabelFor(r.date); r.file=f.name; out.push(r);
     });
   });
   if(!out.length) throw new Error("No records parsed from repo files.");
   RECORDS=out; showDashboard();
 }
 function weekLabelFor(dateStr){ return dateStr; }
-function monthLabel(dateStr){ const p=dateStr.split("-"); const names=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return names[+p[1]-1]+" "+p[0]; }
-function quarterLabel(dateStr){ const p=dateStr.split("-"); const q=Math.floor((+p[1]-1)/3)+1; return "Q"+q+" "+p[0]; }
 
 /* ============ FILTERS ============ */
 function currentFilter(includeDate=true){
-  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent");
-  const m=val("fMonth"),q=val("fQuarter");
-  const days=[...document.querySelectorAll("#fDate option:checked")].map(o=>o.value).filter(v=>v!=="ALL");
+  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent"),d=val("fDate");
   return RECORDS.filter(r=>
     (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&
     (g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
-    (m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q)&&
-    (!includeDate||days.length===0||days.includes(r.date)));
+    (!includeDate||d==="ALL"||r.date===d));
 }
 function populateFilters(){
   fill("fWeek","All Weeks",uniq("week"),true);
   fill("fLoc","All Locations",uniq("location"));
   fill("fGroup","All Groups",uniq("group"));
-  fill("fAgent","All Agents",scopedAgents());
-  fill("fQuarter","All Quarters",quartersSorted());
-  fill("fMonth","All Months",monthsSorted());
-  fillDates();
+  fill("fAgent","All Agents",uniq("agent"));
+  fill("fDate","All Days",uniq("date"));
   // hide Week/By-Week when single week
   const single=uniq("week").length<=1;
   $("fWeek").closest(".field").classList.toggle("hide",single);
   document.querySelector('#viewSeg [data-view="week"]').classList.toggle("hide",single);
 }
 const uniq = key => [...new Set(RECORDS.map(r=>r[key]))].sort();
-function scopedAgents(){ const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),m=val("fMonth"),q=val("fQuarter"); return [...new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q)).map(r=>r.agent))].sort(); }
-function monthsSorted(){ const map=new Map(); RECORDS.forEach(r=>{ if(!map.has(r.month)) map.set(r.month,r.date); }); return [...map.keys()].sort((a,b)=>map.get(a).localeCompare(map.get(b))); }
-function quartersSorted(){ const map=new Map(); RECORDS.forEach(r=>{ if(!map.has(r.quarter)) map.set(r.quarter,r.date); }); return [...map.keys()].sort((a,b)=>map.get(a).localeCompare(map.get(b))); }
-function fillDates(){ const sel=$("fDate"); const cur=[...sel.selectedOptions].map(o=>o.value); const arr=uniq("date"); sel.innerHTML=`<option value="ALL">All Days</option>`+arr.map(v=>`<option value="${v}">${v}</option>`).join(""); let any=false; [...sel.options].forEach(o=>{ if(cur.includes(o.value)){ o.selected=true; any=true; } }); if(!any) sel.options[0].selected=true; }
 function fill(id,allLabel,arr,keepFirst){
   const sel=$(id), cur=sel.value;
   sel.innerHTML=`<option value="ALL">${allLabel}</option>`+arr.map(v=>`<option value="${v}">${v}</option>`).join("");
@@ -398,6 +393,7 @@ function render(){
   renderTrend();
   renderTable(agg,dim);
   renderWatch(recs);
+  renderBreaks(recs);
   renderAgentDaily();
   status(`${recs.length.toLocaleString()} records · ${new Set(recs.map(r=>r.agent)).size} agents · ${new Set(recs.map(r=>r.date)).size} days`);
 }
@@ -518,8 +514,8 @@ function renderAgentDaily(){
     $("agentStats").innerHTML="";
     thead.innerHTML=""; tb.innerHTML=`<tr><td class="empty">No agent selected.</td></tr>`; return;
   }
-  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup"),m=val("fMonth"),q=val("fQuarter");
-  const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q));
+  const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
+  const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
   $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
   $("agentDetailHint").textContent=`Each day ${a} logged in. Days with no login are not shown and do not count against the Productive % average.`;
   const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Working Offline","On Break","Productive %"];
@@ -546,7 +542,7 @@ function renderAgentDaily(){
     <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
     <td>${fmtPct(tp)}</td></tr>`;
   const daysWorked=rows.filter(o=>o.loggedin>0).length;
-  const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(m==="ALL"||r.month===m)&&(q==="ALL"||r.quarter===q)).map(r=>r.date)).size;
+  const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.date)).size;
   const attend=periodDays?daysWorked/periodDays*100:0;
   $("agentStats").innerHTML=`
     <div class="chip"><div class="n">${daysWorked} / ${periodDays}</div><div class="t">Days Logged In</div></div>
@@ -565,6 +561,28 @@ function renderWatch(recs){
     <td>${fmtHrs(o.loggedin)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td></tr>`).join("")
     :`<tr><td colspan="5" class="empty">Everyone is at or above target 🎯</td></tr>`;
 }
+function renderBreaks(recs){
+  // Flag each agent-day where On Break time is over the daily limit. Uses the filtered
+  // record set, so Week / Location / Group / Agent / Day toggles all apply automatically.
+  const flagged=recs.filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>b.onbreak-a.onbreak);
+  $("breaksHint").textContent=`Agent days where On Break time exceeded ${fmtHrs(BREAK_LIMIT)}, for the current selection (${flagged.length}).`;
+  const people=new Set(flagged.map(r=>r.agent)).size;
+  const worst=flagged.length?fmtHrs(flagged[0].onbreak):"0:00:00";
+  $("breaksStats").innerHTML=`
+    <div class="chip"><div class="n" style="color:#c0392b">${flagged.length}</div><div class="t">Days over ${fmtHrs(BREAK_LIMIT)}</div></div>
+    <div class="chip"><div class="n">${people}</div><div class="t">Agents</div></div>
+    <div class="chip"><div class="n">${worst}</div><div class="t">Longest break</div></div>`;
+  const cols=["Agent","Day","Group","On Break","Logged In","Break % of Logged In"];
+  const thead=document.querySelector("#breaksTbl thead");
+  thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
+  const tb=document.querySelector("#breaksTbl tbody");
+  tb.innerHTML=flagged.length?flagged.map(r=>`<tr>
+    <td>${r.agent}</td><td>${r.date}</td><td>${r.group}</td>
+    <td><span class="pill" style="background:#fdecec;color:#c0392b">${fmtHrs(r.onbreak)}</span></td>
+    <td>${fmtHrs(r.loggedin)}</td>
+    <td>${r.loggedin>0?fmtPct(r.onbreak/r.loggedin*100):"—"}</td></tr>`).join("")
+    :`<tr><td colspan="${cols.length}" class="empty">No breaks over ${fmtHrs(BREAK_LIMIT)} in the current selection.</td></tr>`;
+}
 
 /* ============ EXPORT ============ */
 function exportExcel(){
@@ -580,6 +598,15 @@ function exportExcel(){
   const ws=XLSX.utils.aoa_to_sheet([head,...body]);
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,"By "+dim);
+
+  // Extended Breaks tab: every agent-day over the daily limit in the current selection
+  const brk=currentFilter().filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>b.onbreak-a.onbreak);
+  const brkHead=["Agent","Day","Group","On Break","Logged In","Break % of Logged In"];
+  const brkBody=brk.map(r=>[r.agent,r.date,r.group,fmtHrs(r.onbreak),fmtHrs(r.loggedin),
+    r.loggedin>0?+(r.onbreak/r.loggedin*100).toFixed(1):0]);
+  const wsB=XLSX.utils.aoa_to_sheet([brkHead,...brkBody]);
+  XLSX.utils.book_append_sheet(wb,wsB,"Extended Breaks");
+
   XLSX.writeFile(wb,`TSS_Agent_Time_${dim}_${MODE}_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
@@ -601,7 +628,7 @@ function fail(msg){
 }
 function handleFile(f){ const rd=new FileReader(); rd.onload=e=>loadBuffer(e.target.result,f.name); rd.readAsArrayBuffer(f); }
 
-["fWeek","fLoc","fGroup","fMonth","fQuarter"].forEach(id=>$(id).addEventListener("change",()=>{fill("fAgent","All Agents",scopedAgents());fillDates();})); ["fWeek","fLoc","fGroup","fAgent","fDate","fMonth","fQuarter"].forEach(id=>$(id).addEventListener("change",render));
+["fWeek","fLoc","fGroup","fAgent","fDate"].forEach(id=>$(id).addEventListener("change",render));
 $("search").addEventListener("input",render);
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("active"));b.classList.add("active");VIEW=b.dataset.view;SORT={col:null,dir:-1};render();});
@@ -638,7 +665,7 @@ async function boot(){
   }
 }
 boot();
-/* build: v2 */
+/* build: v3 — added Extended Breaks panel (On Break > 1.5h) */
 </script>
 </body>
 </html>
