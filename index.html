@@ -228,6 +228,11 @@ const prodHours = o => PROD_KEYS.reduce((a,k)=>a+(o[k]||0),0);
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
 const TARGET = 80;  // Productive % benchmark (locked). Productive = In Call (Handling) + Available; hours worked = Logged In - On Break
 const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
+// Departed team members to hide everywhere on the dashboard, regardless of what the cumulative
+// export still contains. Add or remove a full name here (exactly as it appears in the report).
+const EXCLUDE_AGENTS = ["Jorge Davis Volquez", "Genesis Ciriaco Maldonado"];
+const _excludedSet = new Set(EXCLUDE_AGENTS.map(s=>s.trim().toLowerCase()));
+const isExcluded = a => _excludedSet.has(String(a||"").trim().toLowerCase());
 const PROD_HEX = "#0f7a3d";
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 
@@ -318,7 +323,7 @@ function parseMain(rows,hi,idx){
     const row=rows[r]; if(!row||!row.length) continue;
     const dateStr=parseDateCell(row[iDate]);
     if(!dateStr) continue;                            // skips metadata / Subtotal / Total / header rows
-    const agent=String(row[iAgent]||"").trim(); if(!agent) continue;
+    const agent=String(row[iAgent]||"").trim(); if(!agent||isExcluded(agent)) continue;
     const grp=cleanGroup(row[iGroup]);
     const rec={date:dateStr, group:grp, location:(grp.split(" ")[0]||"—"), agent, id:String(row[idx("Agent Id")]||"").trim()};
     STATUSES.forEach(s=>rec[s.key]= s.col ? toHours(row[idx(s.col)]) : 0);   // projects has no column here – filled from the exception report
@@ -336,7 +341,7 @@ function parseProjects(rows,hi,idx){
     const dateStr=parseDateCell(row[iDate]); if(!dateStr) continue;         // skips Group/Date Subtotal + Total rows
     const item=String(row[iItem]||"").trim().toLowerCase();
     const ex=EXCEPTION_CODES.find(e=>e.code===item); if(!ex) continue;      // only the productive exception codes count
-    const agent=String(row[iAgent]||"").trim(); if(!agent) continue;
+    const agent=String(row[iAgent]||"").trim(); if(!agent||isExcluded(agent)) continue;
     out.push({date:dateStr, agent, id:String(row[iId]||"").trim(), key:ex.key, hours:toHours(row[iTime])});
   }
   return out;
