@@ -173,12 +173,12 @@
     <div class="grid2">
       <div class="panel">
         <h3>Productive % Trend by Day</h3>
-        <p class="hint">Productive % = (In Call + Available) ÷ hours worked. Dashed line is the 80% target.</p>
+        <p class="hint">Productive % = (In Call + Available) ÷ hours worked. Dashed line is the 75% target.</p>
         <div class="chart-wrap sm"><canvas id="trendChart"></canvas></div>
       </div>
       <div class="panel">
         <h3>Needs Attention</h3>
-        <p class="hint" id="watchHint">Agents below the 80% Productive target for the current selection.</p>
+        <p class="hint" id="watchHint">Agents below the 75% Productive target for the current selection.</p>
         <div class="tablescroll sm"><table id="watchTbl"><thead></thead><tbody></tbody></table></div>
       </div>
     </div>
@@ -201,7 +201,7 @@
   </div>
 
   <footer>
-    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (In Call + Available + Thryv Projects + Chat Support) ÷ (Logged In − On Break) · Target 80%<br>
+    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (In Call + Available + Thryv Projects + Chat Support) ÷ (Logged In − On Break) · Target 75%<br>
     <span id="srcNote"></span>
   </footer>
 </div>
@@ -216,8 +216,8 @@ const STATUSES = [
   {key:"available",   label:"Available",       col:"Available Time",        hex:"#2e9e5b", productive:true},
   {key:"handling",    label:"Handling",        col:"Handling Time",         hex:"#2f6df6", productive:true},
   {key:"wrapup",      label:"Wrap Up",         col:"Wrap Up Time",          hex:"#8b5cf6"},
-  {key:"projects",    label:"Thryv Projects",  col:null,                    hex:"#0d9488", productive:true},  // exception – filled from the exception report, counts toward the 80% target
-  {key:"chatsupport", label:"Chat Support",    col:null,                    hex:"#db2777", productive:true},  // exception – filled from the exception report, counts toward the 80% target
+  {key:"projects",    label:"Thryv Projects",  col:null,                    hex:"#0d9488", productive:true},  // exception – filled from the exception report, counts toward the 75% target
+  {key:"chatsupport", label:"Chat Support",    col:null,                    hex:"#db2777", productive:true},  // exception – filled from the exception report, counts toward the 75% target
   {key:"offline",     label:"Working Offline", col:"Working Offline Time",  hex:"#f59e0b"},
   {key:"onbreak",     label:"On Break",        col:"On Break Time",         hex:"#ef4444"},
 ];
@@ -227,10 +227,10 @@ const EXCEPTION_CODES = [
   {code:"thryv projects", key:"projects"},
   {code:"chat support",   key:"chatsupport"},
 ];
-const PROD_KEYS = STATUSES.filter(s=>s.productive).map(s=>s.key);   // statuses that count toward the 80% target
+const PROD_KEYS = STATUSES.filter(s=>s.productive).map(s=>s.key);   // statuses that count toward the 75% target
 const prodHours = o => PROD_KEYS.reduce((a,k)=>a+(o[k]||0),0);
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
-const TARGET = 80;  // Productive % benchmark (locked). Productive = In Call (Handling) + Available; hours worked = Logged In - On Break
+const TARGET = 75;  // Productive % benchmark. Productive = In Call (Handling) + Available; hours worked = Logged In - On Break
 const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
 // Departed team members to hide everywhere on the dashboard, regardless of what the cumulative
 // export still contains. Add or remove a full name here (exactly as it appears in the report).
@@ -529,12 +529,12 @@ function renderBench(recs){
     <div>
       <div class="lbl">Productive %</div>
       <div class="big" style="color:${barColor}">${fmtPct(pct)}</div>
-      <div class="meta">(In Call + Available + Thryv Projects + Chat Support) ÷ (Logged In − On Break) · Target 80%</div>
+      <div class="meta">(In Call + Available + Thryv Projects + Chat Support) ÷ (Logged In − On Break) · Target 75%</div>
     </div>
     <div class="track">
       <i style="width:${Math.min(100,pct)}%;background:${barColor}"></i>
       <div class="mark" style="left:${TARGET}%"></div>
-      <div class="markL" style="left:${TARGET}%">80%</div>
+      <div class="markL" style="left:${TARGET}%">75%</div>
     </div>
     <div class="spill" style="background:${pillBg};color:${pillFg}">${meets?"Meeting target":"Below target"}</div>`;
 }
@@ -590,7 +590,7 @@ function renderTrend(){
   trendChart&&trendChart.destroy();
   trendChart=new Chart($("trendChart"),{data:{labels,datasets:[
     {type:"line",label:"Productive %",data:util,yAxisID:"y",borderColor:PROD_HEX,backgroundColor:PROD_HEX,tension:.3,fill:false,pointRadius:3},
-    {type:"line",label:"Target 80%",data:labels.map(()=>target),yAxisID:"y",borderColor:"#94a3b8",borderDash:[6,5],pointRadius:0,fill:false},
+    {type:"line",label:"Target 75%",data:labels.map(()=>target),yAxisID:"y",borderColor:"#94a3b8",borderDash:[6,5],pointRadius:0,fill:false},
     {type:"bar",label:"Logged In hrs",data:login,yAxisID:"y1",backgroundColor:"rgba(15,23,42,.10)",borderRadius:3}
   ]},options:{maintainAspectRatio:false,responsive:true,interaction:{mode:"index",intersect:false},
     scales:{x:{grid:{display:false},ticks:{maxRotation:60,autoSkip:true}},
@@ -783,7 +783,7 @@ drop.addEventListener("click",()=>$("file").click());
 drop.addEventListener("drop",e=>{if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);});
 
 function fetchLastUpdated(){
-  fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/commits?path=${encodeURIComponent(ROOT_FALLBACK)}&per_page=1&t=${Date.now()}`,{cache:"no-store",headers:{Accept:"application/vnd.github+json"}})
+  fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}/commits?path=${encodeURIComponent(GH.path)}&per_page=1&t=${Date.now()}`,{cache:"no-store",headers:{Accept:"application/vnd.github+json"}})
     .then(r=>r.ok?r.json():null)
     .then(a=>{ if(a&&a[0]&&a[0].commit){ const d=new Date(a[0].commit.committer.date);
       $("updated").textContent="● Data last updated "+d.toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}); } })
