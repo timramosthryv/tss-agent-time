@@ -42,7 +42,7 @@
   .seg button{border:none;background:transparent;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:.15s}
   .seg button.active{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
   .tabs{margin-left:auto}
-  .kpis{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
   .bench{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 22px;margin-bottom:18px;display:flex;align-items:center;gap:22px;flex-wrap:wrap}
   .bench .big{font-size:36px;font-weight:800;letter-spacing:-1px;line-height:1}
   .bench .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-soft);font-weight:700}
@@ -173,7 +173,7 @@
     <div class="grid2">
       <div class="panel">
         <h3>Productive % Trend by Day</h3>
-        <p class="hint">Productive % = (In Call + Available) ÷ hours worked. Dashed line is the 75% target.</p>
+        <p class="hint">Productive % = sum of productive statuses ÷ Logged In. Dashed line is the 75% target.</p>
         <div class="chart-wrap sm"><canvas id="trendChart"></canvas></div>
       </div>
       <div class="panel">
@@ -201,7 +201,7 @@
   </div>
 
   <footer>
-    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (In Call + Available + Thryv Projects + Chat Support) ÷ (Logged In − On Break) · Target 75%<br>
+    TSS Agent Time On Status · Times shown in the report time zone · Productive % = sum of productive statuses ÷ Logged In · Target 75%<br>
     <span id="srcNote"></span>
   </footer>
 </div>
@@ -212,25 +212,43 @@ const GH = {owner:"timramosthryv", repo:"tss-agent-time", path:"data", branch:"m
 const API = `https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${GH.path}?ref=${GH.branch}`;
 const ROOT_FALLBACK = "data.xlsx";  // if no data/ folder yet
 
+// Every status code shown on the dashboard.
+//   col  = read straight from a column in the wide "Agent Time On Status" report
+//   code = a "Status Code Item" in the By Status Code report; base says which base total it splits out of
+//   other= a derived remainder bucket (base total minus the itemized codes) for un-itemized time
 const STATUSES = [
-  {key:"available",   label:"Available",       col:"Available Time",        hex:"#2e9e5b", productive:true},
-  {key:"handling",    label:"Handling",        col:"Handling Time",         hex:"#2f6df6", productive:true},
-  {key:"wrapup",      label:"Wrap Up",         col:"Wrap Up Time",          hex:"#8b5cf6"},
-  {key:"projects",    label:"Thryv Projects",  col:null,                    hex:"#0d9488", productive:true},  // exception – filled from the exception report, counts toward the 75% target
-  {key:"chatsupport", label:"Chat Support",    col:null,                    hex:"#db2777", productive:true},  // exception – filled from the exception report, counts toward the 75% target
-  {key:"offline",     label:"Working Offline", col:"Working Offline Time",  hex:"#f59e0b"},
-  {key:"onbreak",     label:"On Break",        col:"On Break Time",         hex:"#ef4444"},
+  /* ---- Productive (count toward the 75% target) ---- */
+  {key:"available",    label:"Available",           hex:"#2e9e5b", productive:true, col:"Available Time"},
+  {key:"handling",     label:"In Call/Handling",    hex:"#2f6df6", productive:true, col:"Handling Time"},
+  {key:"apptsupport",  label:"Appointment Support", hex:"#16a34a", productive:true, code:"appointment support", base:"offline"},
+  {key:"apptprep",     label:"Appointment Prep",    hex:"#14b8a6", productive:true, code:"appointment prep",    base:"offline"},
+  {key:"chatsupport",  label:"Chat Support",        hex:"#0ea5e9", productive:true, code:"chat support",        base:"offline"},
+  {key:"emailsupport", label:"Email Support",       hex:"#6366f1", productive:true, code:"email support",       base:"offline"},
+  {key:"projectwork",  label:"Project Work",        hex:"#8b5cf6", productive:true, code:"project work",        base:"offline"},
+  {key:"followup",     label:"Follow Up",           hex:"#0d9488", productive:true, code:"follow up",           base:"offline"},
+  {key:"projects",     label:"Thryv Projects",      hex:"#0891b2", productive:true, code:"thryv projects",      base:"offline"},  // legacy code (pre Jul 31) – kept productive for history
+  /* ---- Non-productive: Working Offline ---- */
+  {key:"wrapup",       label:"Wrap Up",             hex:"#f59e0b", col:"Wrap Up Time"},
+  {key:"addlwrapup",   label:"Additional Wrap-Up",  hex:"#fbbf24", code:"additional wrap-up", base:"offline"},
+  {key:"meeting",      label:"In a Meeting",        hex:"#a855f7", code:"in a meeting",        base:"offline"},
+  {key:"coaching",     label:"Coaching",            hex:"#c084fc", code:"coaching",            base:"offline"},
+  {key:"training",     label:"Training",            hex:"#e879f9", code:"training",            base:"offline"},
+  {key:"sysissues",    label:"System Issues",       hex:"#f97316", code:"system issues",       base:"offline"},
+  {key:"outofoffice",  label:"Out of Office",       hex:"#64748b", code:"out of office",       base:"offline"},
+  {key:"offlineother", label:"Other Working Offline",hex:"#cbd5e1", base:"offline", other:true},
+  /* ---- Non-productive: On Break ---- */
+  {key:"awaydesk",     label:"Away from Desk",      hex:"#fb7185", code:"away from desk", base:"onbreak"},
+  {key:"brk",          label:"Break",               hex:"#ef4444", code:"break",          base:"onbreak"},
+  {key:"lunch",        label:"Lunch",               hex:"#f43f5e", code:"lunch",          base:"onbreak"},
+  {key:"breakother",   label:"Other On Break",      hex:"#fda4af", base:"onbreak", other:true},
 ];
-// Exception status codes that log under Working Offline in 8x8 but count as productive.
-// To support another code later, add one {code,key} row here plus a matching STATUSES entry above.
-const EXCEPTION_CODES = [
-  {code:"thryv projects", key:"projects"},
-  {code:"chat support",   key:"chatsupport"},
-];
+const CODE_MAP = {}; STATUSES.forEach(s=>{ if(s.code) CODE_MAP[s.code]=s.key; });   // "status code item" (lowercased) -> bucket key
+const OFFLINE_CODE_KEYS = STATUSES.filter(s=>s.base==="offline" && s.code).map(s=>s.key);   // itemized Working Offline sub-codes
+const BREAK_CODE_KEYS   = STATUSES.filter(s=>s.base==="onbreak" && s.code).map(s=>s.key);   // itemized On Break sub-codes
 const PROD_KEYS = STATUSES.filter(s=>s.productive).map(s=>s.key);   // statuses that count toward the 75% target
 const prodHours = o => PROD_KEYS.reduce((a,k)=>a+(o[k]||0),0);
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
-const TARGET = 75;  // Productive % benchmark. Productive = In Call (Handling) + Available; hours worked = Logged In - On Break
+const TARGET = 75;  // Productive % benchmark. Productive % = sum of productive statuses ÷ Logged In (On Break now counts against)
 const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
 // Departed team members to hide everywhere on the dashboard, regardless of what the cumulative
 // export still contains. Add or remove a full name here (exactly as it appears in the report).
@@ -323,11 +341,12 @@ function parseWorkbook(buf){
   // Two 8x8 report shapes are supported:
   //   MAIN "Agent Time On Status"        -> has "Logged In Time" plus a column per status
   //   EXCEPTION "Agent Status By Status Code" -> long format with "Status Code Item" + a single "Time" column
-  if(idx("Status Code Item")>=0 && idx("Logged In Time")<0) return {kind:"projects", rows:parseProjects(rows,hi,idx)};
+  if(idx("Status Code Item")>=0 && idx("Logged In Time")<0) return {kind:"codes", rows:parseCodes(rows,hi,idx)};
   return {kind:"main", rows:parseMain(rows,hi,idx)};
 }
 function parseMain(rows,hi,idx){
   const iDate=idx("Start Time"), iGroup=idx("Group"), iAgent=idx("Agent");
+  const iOff=idx("Working Offline Time"), iBrk=idx("On Break Time");
   const recs=[];
   for(let r=hi+1;r<rows.length;r++){
     const row=rows[r]; if(!row||!row.length) continue;
@@ -336,23 +355,24 @@ function parseMain(rows,hi,idx){
     const agent=String(row[iAgent]||"").trim(); if(!agent||isExcluded(agent)) continue;
     const grp=cleanGroup(row[iGroup]);
     const rec={date:dateStr, group:grp, location:(grp.split(" ")[0]||"—"), agent, id:String(row[idx("Agent Id")]||"").trim()};
-    STATUSES.forEach(s=>rec[s.key]= s.col ? toHours(row[idx(s.col)]) : 0);   // projects has no column here – filled from the exception report
+    STATUSES.forEach(s=>rec[s.key]= s.col ? toHours(row[idx(s.col)]) : 0);   // base statuses from columns; code/derived buckets start at 0
     rec.loggedin=toHours(row[idx(LOGIN.col)]);
+    rec.offline=iOff>=0?toHours(row[iOff]):0;          // base Working Offline total – split into sub-codes by the By Status Code report
+    rec.onbreak=iBrk>=0?toHours(row[iBrk]):0;          // base On Break total – used for split + the Extended Breaks panel
     recs.push(rec);
   }
   if(!recs.length) throw new Error("No agent rows found in this file.");
   return recs;
 }
-function parseProjects(rows,hi,idx){
+function parseCodes(rows,hi,idx){
   const iDate=idx("Start Time"), iAgent=idx("Agent"), iId=idx("Agent Id"), iItem=idx("Status Code Item"), iTime=idx("Time");
   const out=[];
   for(let r=hi+1;r<rows.length;r++){
     const row=rows[r]; if(!row||!row.length) continue;
     const dateStr=parseDateCell(row[iDate]); if(!dateStr) continue;         // skips Group/Date Subtotal + Total rows
-    const item=String(row[iItem]||"").trim().toLowerCase();
-    const ex=EXCEPTION_CODES.find(e=>e.code===item); if(!ex) continue;      // only the productive exception codes count
+    const key=CODE_MAP[String(row[iItem]||"").trim().toLowerCase()]; if(!key) continue;  // untracked codes fall into the "Other" remainder
     const agent=String(row[iAgent]||"").trim(); if(!agent||isExcluded(agent)) continue;
-    out.push({date:dateStr, agent, id:String(row[iId]||"").trim(), key:ex.key, hours:toHours(row[iTime])});
+    out.push({date:dateStr, agent, id:String(row[iId]||"").trim(), key, hours:toHours(row[iTime])});
   }
   return out;
 }
@@ -383,7 +403,7 @@ function mergeFiles(list){
   const seen=new Set(); const out=[]; const projectRows=[];
   list.forEach(f=>{
     let parsed; try{parsed=parseWorkbook(f.buf);}catch(e){return;}
-    if(parsed.kind==="projects"){ projectRows.push(...parsed.rows); return; }  // exception report – applied after main records
+    if(parsed.kind==="codes"){ projectRows.push(...parsed.rows); return; }  // By Status Code report – applied after main records
     const period=parsePeriod(f.name);
     parsed.rows.forEach(r=>{
       const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
@@ -392,26 +412,29 @@ function mergeFiles(list){
     });
   });
   if(!out.length){
-    if(projectRows.length) throw new Error("This looks like the exception report (Thryv Projects / Chat Support). Load it alongside the main Agent Time export.");
+    if(projectRows.length) throw new Error("This looks like the By Status Code report. Load it alongside the main Agent Time export.");
     throw new Error("No records parsed from repo files.");
   }
   RECORDS=out;
-  applyProjects(projectRows);
+  applyCodes(projectRows);
   showDashboard();
 }
-function applyProjects(exRows){
+// Fill each agent-day's sub-code buckets from the By Status Code report, then compute the
+// "Other Working Offline" / "Other On Break" remainders so every bucket sums back to Logged In.
+function applyCodes(codeRows){
   PROJECT_STATS=null;
-  if(!exRows||!exRows.length) return;
-  const byKey=new Map();                              // per agent-day: hours for each exception key
-  exRows.forEach(p=>{ const k=p.date+"|"+p.agent; const o=byKey.get(k)||{}; o[p.key]=(o[p.key]||0)+p.hours; byKey.set(k,o); });
+  const byKey=new Map();                              // per agent-day: hours for each code bucket
+  (codeRows||[]).forEach(p=>{ const k=p.date+"|"+p.agent; const o=byKey.get(k)||{}; o[p.key]=(o[p.key]||0)+p.hours; byKey.set(k,o); });
   let credited=0;
   RECORDS.forEach(r=>{
-    const o=byKey.get(r.date+"|"+r.agent); if(!o) return;
-    let tot=0;
-    EXCEPTION_CODES.forEach(e=>{ if(o[e.key]>0){ r[e.key]=o[e.key]; tot+=o[e.key]; } });
-    if(tot>0){ r.offline=Math.max(0, r.offline - tot); credited++; }  // exceptions log under Working Offline in 8x8 – move them out so nothing is counted twice
+    const o=byKey.get(r.date+"|"+r.agent);
+    if(o){ for(const key in o) r[key]=(r[key]||0)+o[key]; credited++; }
+    let sumWO=0; OFFLINE_CODE_KEYS.forEach(k=>sumWO+=r[k]||0);
+    let sumBK=0; BREAK_CODE_KEYS.forEach(k=>sumBK+=r[k]||0);
+    r.offlineother=Math.max(0,(r.offline||0)-sumWO);   // Working Offline time not itemized (e.g. pre Jul 31 days)
+    r.breakother  =Math.max(0,(r.onbreak||0)-sumBK);   // On Break time not itemized
   });
-  PROJECT_STATS={rows:exRows.length, credited, agents:new Set(exRows.map(p=>p.agent)).size};
+  if(codeRows&&codeRows.length) PROJECT_STATS={rows:codeRows.length, credited, agents:new Set(codeRows.map(p=>p.agent)).size};
 }
 function weekLabelFor(dateStr){ return dateStr; }
 
@@ -491,9 +514,8 @@ function aggregate(recs,dim){
     const div=MODE==="avg"?Math.max(1,o.dates.size):1;
     const res={key:o.key,loggedin:o.loggedin/div,dates:o.dates.size,agents:o.agents.size};
     STATUSES.forEach(s=>res[s.key]=o[s.key]/div);
-    const worked=res.loggedin-res.onbreak;               // hours worked = logged in minus break/lunch
-    res.worked=worked;
-    res.util=worked>0?(prodHours(res)/worked*100):0;  // Productive % = productive statuses / worked
+    res.worked=res.loggedin;
+    res.util=res.loggedin>0?(prodHours(res)/res.loggedin*100):0;  // Productive % = productive statuses ÷ Logged In
     return res;
   });
   arr.sort((a,b)=>dim==="date"?a.key.localeCompare(b.key):b.loggedin-a.loggedin);
@@ -518,9 +540,9 @@ function render(){
   status(`${recs.length.toLocaleString()} records · ${new Set(recs.map(r=>r.agent)).size} agents · ${new Set(recs.map(r=>r.date)).size} days`);
 }
 function renderBench(recs){
-  let prod=0, worked=0;
-  recs.forEach(r=>{ prod += prodHours(r); worked += (r.loggedin - r.onbreak); });
-  const pct = worked>0 ? prod/worked*100 : 0;
+  let prod=0, login=0;
+  recs.forEach(r=>{ prod += prodHours(r); login += r.loggedin; });
+  const pct = login>0 ? prod/login*100 : 0;
   const meets = pct>=TARGET;
   const barColor = meets ? PROD_HEX : "#c0392b";
   const pillBg = meets ? "#e6f5ec" : "#fdecec";
@@ -529,7 +551,7 @@ function renderBench(recs){
     <div>
       <div class="lbl">Productive %</div>
       <div class="big" style="color:${barColor}">${fmtPct(pct)}</div>
-      <div class="meta">(In Call + Available + Thryv Projects + Chat Support) ÷ (Logged In − On Break) · Target 75%</div>
+      <div class="meta">Sum of productive statuses ÷ Logged In · Target 75%</div>
     </div>
     <div class="track">
       <i style="width:${Math.min(100,pct)}%;background:${barColor}"></i>
@@ -582,9 +604,9 @@ function renderMix(recs){
 function renderTrend(){
   const recs=currentFilter(false);                   // ignore day filter to show full trend
   const byDay=new Map();
-  recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,prod:0,brk:0}; o.login+=r.loggedin; o.prod+=prodHours(r); o.brk+=r.onbreak; byDay.set(r.date,o);});
+  recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,prod:0}; o.login+=r.loggedin; o.prod+=prodHours(r); byDay.set(r.date,o);});
   const labels=[...byDay.keys()].sort();
-  const util=labels.map(d=>{const o=byDay.get(d); const w=o.login-o.brk; return w>0?+(o.prod/w*100).toFixed(1):0;});
+  const util=labels.map(d=>{const o=byDay.get(d); return o.login>0?+(o.prod/o.login*100).toFixed(1):0;});
   const login=labels.map(d=>+byDay.get(d).login.toFixed(1));
   const target=TARGET;
   trendChart&&trendChart.destroy();
@@ -620,7 +642,7 @@ function renderTable(agg,dim){
     || `<tr><td colspan="${cols.length}" class="empty">No rows match.</td></tr>`;
   const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
   rows.forEach(o=>{t.loggedin+=o.loggedin;STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
-  const tworked=t.loggedin-t.onbreak; const tu=tworked>0?(prodHours(t)/tworked*100):0;
+  const tu=t.loggedin>0?(prodHours(t)/t.loggedin*100):0;
   if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length})</td><td>${fmtHrs(t.loggedin)}</td>
     ${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
 }
@@ -637,30 +659,21 @@ function renderAgentDaily(){
   const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
   const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
   $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
-  $("agentDetailHint").textContent=`Each day ${a} logged in. Days with no login are not shown and do not count against the Productive % average.`;
-  const cols=["Day","Logged In","Available","Avail %","Handling","Hand %","Wrap Up","Thryv Projects","Chat Support","Working Offline","On Break","Productive %"];
+  $("agentDetailHint").textContent=`Each day ${a} logged in, with hours per status. Days with no login are not shown.`;
+  const cols=["Day","Logged In"].concat(STATUSES.map(s=>s.label)).concat(["Productive %"]);
   thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const byDay=new Map();
-  recs.forEach(r=>{ if(!byDay.has(r.date)) byDay.set(r.date,{date:r.date,loggedin:0,available:0,handling:0,wrapup:0,projects:0,chatsupport:0,offline:0,onbreak:0});
-    const o=byDay.get(r.date); o.loggedin+=r.loggedin;o.available+=r.available;o.handling+=r.handling;o.wrapup+=r.wrapup;o.projects+=r.projects;o.chatsupport+=r.chatsupport;o.offline+=r.offline;o.onbreak+=r.onbreak; });
+  recs.forEach(r=>{ if(!byDay.has(r.date)){const init={date:r.date,loggedin:0}; STATUSES.forEach(s=>init[s.key]=0); byDay.set(r.date,init);}
+    const o=byDay.get(r.date); o.loggedin+=r.loggedin; STATUSES.forEach(s=>o[s.key]+=r[s.key]); });
   const rows=[...byDay.values()].sort((x,y)=>x.date.localeCompare(y.date));
-  const pctOf=(v,base)=>base>0?fmtPct(v/base*100):"—";
-  const prodPct=o=>{const wk=o.loggedin-o.onbreak;return wk>0?prodHours(o)/wk*100:0;};
-  tb.innerHTML=rows.map(o=>{const pp=prodPct(o);return `<tr>
-    <td>${o.date}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
-    <td>${fmtHrs(o.available)}</td><td>${pctOf(o.available,o.loggedin)}</td>
-    <td>${fmtHrs(o.handling)}</td><td>${pctOf(o.handling,o.loggedin)}</td>
-    <td>${fmtHrs(o.wrapup)}</td><td>${fmtHrs(o.projects)}</td><td>${fmtHrs(o.chatsupport)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td>
-    <td><span class="pill" style="background:${pp>=TARGET?'#e6f5ec':'#fdecec'};color:${pp>=TARGET?'#1e7a45':'#c0392b'}">${fmtPct(pp)}</span></td></tr>`;}).join("")
+  const prodPct=o=>o.loggedin>0?prodHours(o)/o.loggedin*100:0;
+  const pill=pp=>`<span class="pill" style="background:${pp>=TARGET?'#e6f5ec':'#fdecec'};color:${pp>=TARGET?'#1e7a45':'#c0392b'}">${fmtPct(pp)}</span>`;
+  tb.innerHTML=rows.map(o=>{const pp=prodPct(o);return `<tr><td>${o.date}</td><td><b>${fmtHrs(o.loggedin)}</b></td>${STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}</td>`).join("")}<td>${pill(pp)}</td></tr>`;}).join("")
     || `<tr><td colspan="${cols.length}" class="empty">No days for this agent in the current selection.</td></tr>`;
-  const t={loggedin:0,available:0,handling:0,wrapup:0,projects:0,chatsupport:0,offline:0,onbreak:0};
-  rows.forEach(o=>{for(const k in t)t[k]+=o[k];});
+  const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
+  rows.forEach(o=>{t.loggedin+=o.loggedin; STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
   const tp=prodPct(t);
-  if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length} days)</td><td>${fmtHrs(t.loggedin)}</td>
-    <td>${fmtHrs(t.available)}</td><td>${pctOf(t.available,t.loggedin)}</td>
-    <td>${fmtHrs(t.handling)}</td><td>${pctOf(t.handling,t.loggedin)}</td>
-    <td>${fmtHrs(t.wrapup)}</td><td>${fmtHrs(t.projects)}</td><td>${fmtHrs(t.chatsupport)}</td><td>${fmtHrs(t.offline)}</td><td>${fmtHrs(t.onbreak)}</td>
-    <td>${fmtPct(tp)}</td></tr>`;
+  if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length} days)</td><td>${fmtHrs(t.loggedin)}</td>${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}</td>`).join("")}<td>${fmtPct(tp)}</td></tr>`;
   const daysWorked=rows.filter(o=>o.loggedin>0).length;
   const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.date)).size;
   const attend=periodDays?daysWorked/periodDays*100:0;
@@ -671,14 +684,14 @@ function renderAgentDaily(){
 }
 function renderWatch(recs){
   const target=TARGET;
-  const agg=aggregate(recs,"agent").filter(o=>o.worked>0 && o.util<target).sort((a,b)=>a.util-b.util);
+  const agg=aggregate(recs,"agent").filter(o=>o.loggedin>0 && o.util<target).sort((a,b)=>a.util-b.util);
   $("watchHint").textContent=`Agents below ${target}% Productive for the current selection (${agg.length}).`;
   const thead=document.querySelector("#watchTbl thead");
-  thead.innerHTML="<tr><th>Agent</th><th>Productive %</th><th>Logged In</th><th>Offline</th><th>Break</th></tr>";
+  thead.innerHTML="<tr><th>Agent</th><th>Productive %</th><th>Logged In</th><th>Productive</th><th>Non-Productive</th></tr>";
   const tb=document.querySelector("#watchTbl tbody");
-  tb.innerHTML=agg.length?agg.map(o=>`<tr><td>${o.key}</td>
+  tb.innerHTML=agg.length?agg.map(o=>{const p=prodHours(o);return `<tr><td>${o.key}</td>
     <td><span class="pill" style="background:#fdecec;color:#c0392b">${fmtPct(o.util)}</span></td>
-    <td>${fmtHrs(o.loggedin)}</td><td>${fmtHrs(o.offline)}</td><td>${fmtHrs(o.onbreak)}</td></tr>`).join("")
+    <td>${fmtHrs(o.loggedin)}</td><td>${fmtHrs(p)}</td><td>${fmtHrs(o.loggedin-p)}</td></tr>`;}).join("")
     :`<tr><td colspan="5" class="empty">Everyone is at or above target 🎯</td></tr>`;
 }
 function breakSortVal(r,col){
