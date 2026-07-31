@@ -173,7 +173,7 @@
     <div class="grid2">
       <div class="panel">
         <h3>Productive % Trend by Day</h3>
-        <p class="hint">Productive % = sum of productive statuses ÷ Logged In. Dashed line is the 75% target.</p>
+        <p class="hint">Productive % = (Logged In − Non-Productive Time) ÷ Logged In. Dashed line is the 75% target.</p>
         <div class="chart-wrap sm"><canvas id="trendChart"></canvas></div>
       </div>
       <div class="panel">
@@ -201,7 +201,7 @@
   </div>
 
   <footer>
-    TSS Agent Time On Status · Times shown in the report time zone · Productive % = sum of productive statuses ÷ Logged In · Target 75%<br>
+    TSS Agent Time On Status · Times shown in the report time zone · Productive % = (Logged In − Non-Productive Time) ÷ Logged In · Target 75%<br>
     <span id="srcNote"></span>
   </footer>
 </div>
@@ -551,7 +551,7 @@ function renderBench(recs){
     <div>
       <div class="lbl">Productive %</div>
       <div class="big" style="color:${barColor}">${fmtPct(pct)}</div>
-      <div class="meta">Sum of productive statuses ÷ Logged In · Target 75%</div>
+      <div class="meta">(Logged In − Non-Productive Time) ÷ Logged In · Target 75%</div>
     </div>
     <div class="track">
       <i style="width:${Math.min(100,pct)}%;background:${barColor}"></i>
