@@ -42,7 +42,16 @@
   .seg button{border:none;background:transparent;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:.15s}
   .seg button.active{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
   .tabs{margin-left:auto}
-  .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  #kpis{margin-bottom:18px}
+  .kpigroup{margin-bottom:14px}
+  .kpihead{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin:0 2px 8px;font-size:12.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase}
+  .kpihead.prod{color:#1e7a45}
+  .kpihead.non{color:#c0392b}
+  .kpihead .sub{font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--ink-soft)}
+  .kpi.prod{border-left:4px solid #2e9e5b}
+  .kpi.non{border-left:4px solid #c0392b}
+  .kpi.total{border-left:4px solid var(--ink)}
   .bench{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 22px;margin-bottom:18px;display:flex;align-items:center;gap:22px;flex-wrap:wrap}
   .bench .big{font-size:36px;font-weight:800;letter-spacing:-1px;line-height:1}
   .bench .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-soft);font-weight:700}
@@ -148,7 +157,7 @@
 
     <div class="bench" id="bench"></div>
 
-    <div class="kpis" id="kpis"></div>
+    <div id="kpis"></div>
 
     <div class="panel">
       <div class="phead"><div><h3 id="chartTitle">Time Breakdown by Day</h3><p class="hint" id="chartHint">Stacked hours by status. Click a legend item to toggle it.</p></div></div>
@@ -565,15 +574,16 @@ function renderKPIs(recs){
   const div=MODE==="avg"?days:1;
   const tot={loggedin:0}; STATUSES.forEach(s=>tot[s.key]=0);
   recs.forEach(r=>{tot.loggedin+=r.loggedin; STATUSES.forEach(s=>tot[s.key]+=r[s.key]);});
-  const suffix=MODE==="avg"?"avg hrs/day":"total hrs";
-  const cards=[kpiCard(LOGIN.label,fmtHrs(tot.loggedin/div),(MODE==="avg"?"avg time/day logged in":"total time logged in"),LOGIN.hex,100)];
-  STATUSES.forEach(s=>{
-    const pct=tot.loggedin?tot[s.key]/tot.loggedin*100:0;
-    cards.push(kpiCard(s.label,fmtHrs(tot[s.key]/div),fmtPct(pct)+" of logged in",s.hex,pct));
-  });
-  $("kpis").innerHTML=cards.join("");
+  const card=(s,kind)=>{const pct=tot.loggedin?tot[s.key]/tot.loggedin*100:0; return kpiCard(s.label,fmtHrs(tot[s.key]/div),fmtPct(pct)+" of logged in",s.hex,pct,kind);};
+  const prodList=STATUSES.filter(s=>s.productive), nonList=STATUSES.filter(s=>!s.productive);
+  const prodPct=tot.loggedin?prodList.reduce((a,s)=>a+tot[s.key],0)/tot.loggedin*100:0;
+  const nonPct =tot.loggedin?nonList.reduce((a,s)=>a+tot[s.key],0)/tot.loggedin*100:0;
+  const lead=`<div class="kpigroup"><div class="kpihead">Total</div><div class="kpis">${kpiCard(LOGIN.label,fmtHrs(tot.loggedin/div),(MODE==="avg"?"avg time/day logged in":"total time logged in"),LOGIN.hex,100,"total")}</div></div>`;
+  const prodGroup=`<div class="kpigroup"><div class="kpihead prod">Productive <span class="sub">counts toward the 75% target · ${fmtPct(prodPct)} of logged in</span></div><div class="kpis">${prodList.map(s=>card(s,"prod")).join("")}</div></div>`;
+  const nonGroup=`<div class="kpigroup"><div class="kpihead non">Non-Productive <span class="sub">counts against the target · ${fmtPct(nonPct)} of logged in</span></div><div class="kpis">${nonList.map(s=>card(s,"non")).join("")}</div></div>`;
+  $("kpis").innerHTML=lead+prodGroup+nonGroup;
 }
-const kpiCard=(label,v,sub,hex,pct)=>`<div class="kpi"><span class="dot" style="background:${hex}"></span>
+const kpiCard=(label,v,sub,hex,pct,kind)=>`<div class="kpi ${kind||''}"><span class="dot" style="background:${hex}"></span>
   <div class="label">${label}</div><div class="val">${v}</div><div class="sub">${sub}</div>
   <div class="pctbar"><i style="width:${Math.min(100,pct)}%;background:${hex}"></i></div></div>`;
 
