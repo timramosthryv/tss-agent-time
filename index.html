@@ -259,6 +259,7 @@ const prodHours = o => PROD_KEYS.reduce((a,k)=>a+(o[k]||0),0);
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
 const TARGET = 75;  // Productive % benchmark. Productive % = sum of productive statuses ÷ Logged In (On Break now counts against)
 const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
+const OTHER_TOL = 2/60;   // 2 minutes (in hours): an "Other" remainder smaller than this is just rounding drift between the two 8x8 reports, so fold it into the largest itemized code instead of showing a sliver
 // Departed team members to hide everywhere on the dashboard, regardless of what the cumulative
 // export still contains. Add or remove a full name here (exactly as it appears in the report).
 const EXCLUDE_AGENTS = ["Jorge Davis Volquez", "Genesis Ciriaco Maldonado"];
@@ -440,10 +441,19 @@ function applyCodes(codeRows){
     if(o){ for(const key in o) r[key]=(r[key]||0)+o[key]; credited++; }
     let sumWO=0; OFFLINE_CODE_KEYS.forEach(k=>sumWO+=r[k]||0);
     let sumBK=0; BREAK_CODE_KEYS.forEach(k=>sumBK+=r[k]||0);
-    r.offlineother=Math.max(0,(r.offline||0)-sumWO);   // Working Offline time not itemized (e.g. pre Jul 31 days)
+    r.offlineother=Math.max(0,(r.offline||0)-sumWO);   // Working Offline time not itemized (mostly pre Jul 31 days)
     r.breakother  =Math.max(0,(r.onbreak||0)-sumBK);   // On Break time not itemized
+    absorbDrift(r,"offlineother",OFFLINE_CODE_KEYS);   // seconds-level report drift -> largest itemized code
+    absorbDrift(r,"breakother",BREAK_CODE_KEYS);
   });
   if(codeRows&&codeRows.length) PROJECT_STATS={rows:codeRows.length, credited, agents:new Set(codeRows.map(p=>p.agent)).size};
+}
+// If an "Other" remainder is just sub-2-minute rounding drift between the two reports, fold it into
+// the largest itemized code so the day still totals the same but no trivial "Other" sliver shows.
+function absorbDrift(r,otherKey,keys){
+  const v=r[otherKey]||0; if(v<=0||v>=OTHER_TOL) return;
+  let best=null,bv=0; keys.forEach(k=>{ if((r[k]||0)>bv){ bv=r[k]||0; best=k; } });
+  if(best){ r[best]+=v; r[otherKey]=0; }
 }
 function weekLabelFor(dateStr){ return dateStr; }
 
