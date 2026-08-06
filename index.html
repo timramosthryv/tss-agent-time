@@ -235,14 +235,12 @@ const STATUSES = [
   {key:"emailsupport", label:"Email Support",       hex:"#6366f1", productive:true, code:"email support",       base:"offline"},
   {key:"projectwork",  label:"Project Work",        hex:"#8b5cf6", productive:true, code:"project work",        base:"offline"},
   {key:"followup",     label:"Follow Up",           hex:"#0d9488", productive:true, code:"follow up",           base:"offline"},
-  {key:"projects",     label:"Thryv Projects",      hex:"#0891b2", productive:true, code:"thryv projects",      base:"offline"},  // legacy code (pre Jul 31) – kept productive for history
+  {key:"wrapup",       label:"Wrap Up",             hex:"#f59e0b", productive:true, col:"Wrap Up Time"},
   /* ---- Non-productive: Working Offline ---- */
-  {key:"wrapup",       label:"Wrap Up",             hex:"#f59e0b", col:"Wrap Up Time"},
   {key:"addlwrapup",   label:"Additional Wrap-Up",  hex:"#fbbf24", code:"additional wrap-up", base:"offline"},
   {key:"meeting",      label:"In a Meeting",        hex:"#a855f7", code:"in a meeting",        base:"offline"},
   {key:"coaching",     label:"Coaching",            hex:"#c084fc", code:"coaching",            base:"offline"},
   {key:"training",     label:"Training",            hex:"#e879f9", code:"training",            base:"offline"},
-  {key:"sysissues",    label:"System Issues",       hex:"#f97316", code:"system issues",       base:"offline"},
   {key:"outofoffice",  label:"Out of Office",       hex:"#64748b", code:"out of office",       base:"offline"},
   {key:"offlineother", label:"Other Working Offline",hex:"#cbd5e1", base:"offline", other:true},
   /* ---- Non-productive: On Break ---- */
@@ -260,6 +258,7 @@ const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f
 const TARGET = 75;  // Productive % benchmark. Productive % = sum of productive statuses ÷ Logged In (On Break now counts against)
 const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
 const OTHER_TOL = 2/60;   // 2 minutes (in hours): an "Other" remainder smaller than this is just rounding drift between the two 8x8 reports, so fold it into the largest itemized code instead of showing a sliver
+const START_DATE = "2026-08-01";  // dashboard tracks data from this date on; earlier dates (July transition) are ignored
 // Departed team members to hide everywhere on the dashboard, regardless of what the cumulative
 // export still contains. Add or remove a full name here (exactly as it appears in the report).
 const EXCLUDE_AGENTS = ["Jorge Davis Volquez", "Genesis Ciriaco Maldonado"];
@@ -270,7 +269,7 @@ const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:
 
 let RECORDS = [], VIEW="day", MODE="total", SORT={col:null,dir:-1}, mainChart, mixChart, trendChart;
 let BREAK_SORT = {col:"date", dir:1};   // Extended Breaks default: day (oldest first), then longest break
-let PROJECT_STATS = null;               // summary of exception rows (Thryv Projects, Chat Support) applied to the data
+let PROJECT_STATS = null;               // summary of By Status Code rows applied to the data
 const projectNote = () => PROJECT_STATS && PROJECT_STATS.rows ? ` · Exceptions applied: ${PROJECT_STATS.credited} agent-days credited as productive` : "";
 const $ = id => document.getElementById(id);
 const val = id => $(id).value;
@@ -416,6 +415,7 @@ function mergeFiles(list){
     if(parsed.kind==="codes"){ projectRows.push(...parsed.rows); return; }  // By Status Code report – applied after main records
     const period=parsePeriod(f.name);
     parsed.rows.forEach(r=>{
+      if(r.date < START_DATE) return;                    // only track data from START_DATE on
       const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
       if(seen.has(k)) return; seen.add(k);
       r.week=period||weekLabelFor(r.date); r.file=f.name; out.push(r);
