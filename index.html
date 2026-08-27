@@ -236,6 +236,7 @@ const STATUSES = [
   {key:"projectwork",  label:"Project Work",        hex:"#8b5cf6", productive:true, code:"project work",        base:"offline"},
   {key:"followup",     label:"Follow Up",           hex:"#0d9488", productive:true, code:"follow up",           base:"offline"},
   {key:"wrapup",       label:"Wrap Up",             hex:"#f59e0b", productive:true, col:"Wrap Up Time"},
+  {key:"relogin",      label:"Agent Relogin (System)", hex:"#84cc16", productive:true},   // 8x8 provider artifact (auto re-login). Credited as productive so agents keep 100% of their time. Populated in applyCodes.
   /* ---- Non-productive: Working Offline ---- */
   {key:"addlwrapup",   label:"Additional Wrap-Up",  hex:"#fbbf24", code:"additional wrap-up", base:"offline"},
   {key:"meeting",      label:"In a Meeting",        hex:"#a855f7", code:"in a meeting",        base:"offline"},
@@ -256,7 +257,10 @@ const PROD_KEYS = STATUSES.filter(s=>s.productive).map(s=>s.key);   // statuses 
 const prodHours = o => PROD_KEYS.reduce((a,k)=>a+(o[k]||0),0);
 const LOGIN = {key:"loggedin", label:"Logged In", col:"Logged In Time", hex:"#0f172a"};
 const TARGET = 75;  // Productive % benchmark. Productive % = sum of productive statuses ÷ Logged In (On Break now counts against)
-const BREAK_LIMIT = 1.5;  // Extended Breaks flag: On Break time over 1.5 hours (90 min) on a single day
+const BREAK_LIMIT = 91/60;  // Extended Breaks flag: Break + Lunch reaching 1:31:00 on a single day (timer starts at 1:31:00)
+const breakLunch = r => (r.brk||0)+(r.lunch||0);   // Extended Breaks counts Break + Lunch only (excludes Away from Desk and Other On Break)
+const overBreak  = r => Math.round(breakLunch(r)*3600) >= 5460;   // 5460s = 1:31:00
+const DETAIL_STATUSES = STATUSES.filter(s=>s.key!=="outofoffice");   // Daily Detail tables omit Out of Office
 const OTHER_TOL = 2/60;   // 2 minutes (in hours): an "Other" remainder smaller than this is just rounding drift between the two 8x8 reports, so fold it into the largest itemized code instead of showing a sliver
 const START_DATE = "2026-08-01";  // dashboard tracks data from this date on; earlier dates (July transition) are ignored
 // Departed team members to hide everywhere on the dashboard, regardless of what the cumulative
@@ -374,13 +378,20 @@ function parseMain(rows,hi,idx){
   return recs;
 }
 function parseCodes(rows,hi,idx){
-  const iDate=idx("Start Time"), iAgent=idx("Agent"), iId=idx("Agent Id"), iItem=idx("Status Code Item"), iTime=idx("Time");
+  const iDate=idx("Start Time"), iAgent=idx("Agent"), iId=idx("Agent Id"), iItem=idx("Status Code Item"), iTime=idx("Time"), iStatus=idx("Status");
   const out=[];
   for(let r=hi+1;r<rows.length;r++){
     const row=rows[r]; if(!row||!row.length) continue;
     const dateStr=parseDateCell(row[iDate]); if(!dateStr) continue;         // skips Group/Date Subtotal + Total rows
-    const key=CODE_MAP[String(row[iItem]||"").trim().toLowerCase()]; if(!key) continue;  // untracked codes fall into the "Other" remainder
     const agent=String(row[iAgent]||"").trim(); if(!agent||isExcluded(agent)) continue;
+    const item=String(row[iItem]||"").trim().toLowerCase();
+    if(item==="agent relogin"){                                            // 8x8 provider artifact (auto re-login) – carve out per parent so it can be credited as productive
+      const parent=String(iStatus>=0?row[iStatus]:"").trim().toLowerCase();
+      const rk = parent==="on break" ? "_reloginbrk" : (parent==="working offline" ? "_reloginoff" : null);  // Wrap Up-parent relogin is already inside Wrap Up Time, so skip it to avoid double counting
+      if(rk) out.push({date:dateStr, agent, id:String(row[iId]||"").trim(), key:rk, hours:toHours(row[iTime])});
+      continue;
+    }
+    const key=CODE_MAP[item]; if(!key) continue;                           // untracked codes fall into the "Other" remainder
     out.push({date:dateStr, agent, id:String(row[iId]||"").trim(), key, hours:toHours(row[iTime])});
   }
   return out;
@@ -439,9 +450,10 @@ function applyCodes(codeRows){
   RECORDS.forEach(r=>{
     const o=byKey.get(r.date+"|"+r.agent);
     if(o){ for(const key in o) r[key]=(r[key]||0)+o[key]; credited++; }
-    let sumWO=0; OFFLINE_CODE_KEYS.forEach(k=>sumWO+=r[k]||0);
-    let sumBK=0; BREAK_CODE_KEYS.forEach(k=>sumBK+=r[k]||0);
-    r.offlineother=Math.max(0,(r.offline||0)-sumWO);   // Working Offline time not itemized (mostly pre Jul 31 days)
+    r.relogin=(r._reloginoff||0)+(r._reloginbrk||0);   // Agent Relogin credited as productive (its own line)
+    let sumWO=0; OFFLINE_CODE_KEYS.forEach(k=>sumWO+=r[k]||0); sumWO+=(r._reloginoff||0);  // carve relogin out of the Working Offline parent
+    let sumBK=0; BREAK_CODE_KEYS.forEach(k=>sumBK+=r[k]||0);  sumBK+=(r._reloginbrk||0);   // carve relogin out of the On Break parent
+    r.offlineother=Math.max(0,(r.offline||0)-sumWO);   // Working Offline time not itemized
     r.breakother  =Math.max(0,(r.onbreak||0)-sumBK);   // On Break time not itemized
     absorbDrift(r,"offlineother",OFFLINE_CODE_KEYS);   // seconds-level report drift -> largest itemized code
     absorbDrift(r,"breakother",BREAK_CODE_KEYS);
@@ -586,11 +598,12 @@ function renderKPIs(recs){
   recs.forEach(r=>{tot.loggedin+=r.loggedin; STATUSES.forEach(s=>tot[s.key]+=r[s.key]);});
   const card=(s,kind)=>{const pct=tot.loggedin?tot[s.key]/tot.loggedin*100:0; return kpiCard(s.label,fmtHrs(tot[s.key]/div),fmtPct(pct)+" of logged in",s.hex,pct,kind);};
   const prodList=STATUSES.filter(s=>s.productive), nonList=STATUSES.filter(s=>!s.productive);
-  const prodPct=tot.loggedin?prodList.reduce((a,s)=>a+tot[s.key],0)/tot.loggedin*100:0;
-  const nonPct =tot.loggedin?nonList.reduce((a,s)=>a+tot[s.key],0)/tot.loggedin*100:0;
+  const prodSum=prodList.reduce((a,s)=>a+tot[s.key],0), nonSum=nonList.reduce((a,s)=>a+tot[s.key],0);
+  const prodPct=tot.loggedin?prodSum/tot.loggedin*100:0;
+  const nonPct =tot.loggedin?nonSum/tot.loggedin*100:0;
   const lead=`<div class="kpigroup"><div class="kpihead">Total</div><div class="kpis">${kpiCard(LOGIN.label,fmtHrs(tot.loggedin/div),(MODE==="avg"?"avg time/day logged in":"total time logged in"),LOGIN.hex,100,"total")}</div></div>`;
-  const prodGroup=`<div class="kpigroup"><div class="kpihead prod">Productive <span class="sub">counts toward the 75% target · ${fmtPct(prodPct)} of logged in</span></div><div class="kpis">${prodList.map(s=>card(s,"prod")).join("")}</div></div>`;
-  const nonGroup=`<div class="kpigroup"><div class="kpihead non">Non-Productive <span class="sub">counts against the target · ${fmtPct(nonPct)} of logged in</span></div><div class="kpis">${nonList.map(s=>card(s,"non")).join("")}</div></div>`;
+  const prodGroup=`<div class="kpigroup"><div class="kpihead prod">Productive <span class="sub">counts toward the 75% target · ${fmtHrs(prodSum/div)} · ${fmtPct(prodPct)} of logged in</span></div><div class="kpis">${prodList.map(s=>card(s,"prod")).join("")}</div></div>`;
+  const nonGroup=`<div class="kpigroup"><div class="kpihead non">Non-Productive <span class="sub">counts against the target · ${fmtHrs(nonSum/div)} · ${fmtPct(nonPct)} of logged in</span></div><div class="kpis">${nonList.map(s=>card(s,"non")).join("")}</div></div>`;
   $("kpis").innerHTML=lead+prodGroup+nonGroup;
 }
 const kpiCard=(label,v,sub,hex,pct,kind)=>`<div class="kpi ${kind||''}"><span class="dot" style="background:${hex}"></span>
@@ -646,7 +659,7 @@ function renderTable(agg,dim){
   $("tableTitle").textContent={date:"Daily Detail",agent:"Agent Detail",group:"Group Detail",week:"Weekly Detail"}[dim];
   $("tableHint").textContent=(MODE==="avg"?"Avg time/day per status (h:mm:ss)":"Time per status (h:mm:ss)")+" with % of Logged In. Click a header to sort.";
   const q=val("search").trim().toLowerCase();
-  const cols=[{k:"key",l:dimName},{k:"loggedin",l:"Logged In"}].concat(STATUSES.map(s=>({k:s.key,l:s.label}))).concat([{k:"util",l:"Productive %"}]);
+  const cols=[{k:"key",l:dimName},{k:"loggedin",l:"Logged In"}].concat(DETAIL_STATUSES.map(s=>({k:s.key,l:s.label}))).concat([{k:"util",l:"Productive %"}]);
   const thead=document.querySelector("#tbl thead");
   thead.innerHTML="<tr>"+cols.map(c=>`<th data-k="${c.k}">${c.l}</th>`).join("")+"</tr>";
   thead.querySelectorAll("th").forEach(th=>th.onclick=()=>{const k=th.dataset.k;SORT.dir=SORT.col===k?-SORT.dir:-1;SORT.col=k;render();});
@@ -657,14 +670,14 @@ function renderTable(agg,dim){
   const target=TARGET;
   tb.innerHTML=rows.map(o=>`<tr>
     <td>${o.key}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
-    ${STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}${cellPct(o[s.key],o.loggedin)}</td>`).join("")}
+    ${DETAIL_STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}${cellPct(o[s.key],o.loggedin)}</td>`).join("")}
     <td><span class="pill" style="background:${o.util>=target?'#e6f5ec':'#fdecec'};color:${o.util>=target?'#1e7a45':'#c0392b'}">${fmtPct(o.util)}</span></td></tr>`).join("")
     || `<tr><td colspan="${cols.length}" class="empty">No rows match.</td></tr>`;
   const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
   rows.forEach(o=>{t.loggedin+=o.loggedin;STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
   const tu=t.loggedin>0?(prodHours(t)/t.loggedin*100):0;
   if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length})</td><td>${fmtHrs(t.loggedin)}</td>
-    ${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
+    ${DETAIL_STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
 }
 function renderAgentDaily(){
   const a=val("fAgent");
@@ -680,7 +693,7 @@ function renderAgentDaily(){
   const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
   $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
   $("agentDetailHint").textContent=`Each day ${a} logged in, with hours per status. Days with no login are not shown.`;
-  const cols=["Day","Logged In"].concat(STATUSES.map(s=>s.label)).concat(["Productive %"]);
+  const cols=["Day","Logged In"].concat(DETAIL_STATUSES.map(s=>s.label)).concat(["Productive %"]);
   thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const byDay=new Map();
   recs.forEach(r=>{ if(!byDay.has(r.date)){const init={date:r.date,loggedin:0}; STATUSES.forEach(s=>init[s.key]=0); byDay.set(r.date,init);}
@@ -688,12 +701,12 @@ function renderAgentDaily(){
   const rows=[...byDay.values()].sort((x,y)=>x.date.localeCompare(y.date));
   const prodPct=o=>o.loggedin>0?prodHours(o)/o.loggedin*100:0;
   const pill=pp=>`<span class="pill" style="background:${pp>=TARGET?'#e6f5ec':'#fdecec'};color:${pp>=TARGET?'#1e7a45':'#c0392b'}">${fmtPct(pp)}</span>`;
-  tb.innerHTML=rows.map(o=>{const pp=prodPct(o);return `<tr><td>${o.date}</td><td><b>${fmtHrs(o.loggedin)}</b></td>${STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}</td>`).join("")}<td>${pill(pp)}</td></tr>`;}).join("")
+  tb.innerHTML=rows.map(o=>{const pp=prodPct(o);return `<tr><td>${o.date}</td><td><b>${fmtHrs(o.loggedin)}</b></td>${DETAIL_STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}</td>`).join("")}<td>${pill(pp)}</td></tr>`;}).join("")
     || `<tr><td colspan="${cols.length}" class="empty">No days for this agent in the current selection.</td></tr>`;
   const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
   rows.forEach(o=>{t.loggedin+=o.loggedin; STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
   const tp=prodPct(t);
-  if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length} days)</td><td>${fmtHrs(t.loggedin)}</td>${STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}</td>`).join("")}<td>${fmtPct(tp)}</td></tr>`;
+  if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length} days)</td><td>${fmtHrs(t.loggedin)}</td>${DETAIL_STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}</td>`).join("")}<td>${fmtPct(tp)}</td></tr>`;
   const daysWorked=rows.filter(o=>o.loggedin>0).length;
   const periodDays=new Set(RECORDS.filter(r=>(w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)).map(r=>r.date)).size;
   const attend=periodDays?daysWorked/periodDays*100:0;
@@ -715,27 +728,28 @@ function renderWatch(recs){
     :`<tr><td colspan="5" class="empty">Everyone is at or above target 🎯</td></tr>`;
 }
 function breakSortVal(r,col){
-  if(col==="onbreak"||col==="loggedin") return r[col];
-  if(col==="brkpct") return r.loggedin>0?r.onbreak/r.loggedin:0;
+  if(col==="bl") return breakLunch(r);
+  if(col==="loggedin") return r.loggedin;
+  if(col==="brkpct") return r.loggedin>0?breakLunch(r)/r.loggedin:0;
   return String(r[col]||"");
 }
 function renderBreaks(recs){
   // Flag each agent-day where On Break time is over the daily limit. Uses the filtered
   // record set, so Week / Location / Group / Agent / Day toggles all apply automatically.
   const {col,dir}=BREAK_SORT;
-  const flagged=recs.filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>{
+  const flagged=recs.filter(overBreak).sort((a,b)=>{
     const va=breakSortVal(a,col), vb=breakSortVal(b,col);
     const primary = typeof va==="number" ? dir*(va-vb) : dir*va.localeCompare(vb);
-    return primary || a.date.localeCompare(b.date) || (b.onbreak-a.onbreak);  // tie-break: day, then longest break
+    return primary || a.date.localeCompare(b.date) || (breakLunch(b)-breakLunch(a));  // tie-break: day, then longest
   });
-  $("breaksHint").textContent=`Agent days where On Break time exceeded ${fmtHrs(BREAK_LIMIT)}, for the current selection (${flagged.length}). Ordered by day, then longest break. Click a header to re-sort.`;
+  $("breaksHint").textContent=`Agent days where Break + Lunch reached ${fmtHrs(BREAK_LIMIT)}, for the current selection (${flagged.length}). Ordered by day, then longest. Click a header to re-sort.`;
   const people=new Set(flagged.map(r=>r.agent)).size;
-  const worst=flagged.length?fmtHrs(Math.max(...flagged.map(r=>r.onbreak))):"0:00:00";
+  const worst=flagged.length?fmtHrs(Math.max(...flagged.map(breakLunch))):"0:00:00";
   $("breaksStats").innerHTML=`
-    <div class="chip"><div class="n" style="color:#c0392b">${flagged.length}</div><div class="t">Days over ${fmtHrs(BREAK_LIMIT)}</div></div>
+    <div class="chip"><div class="n" style="color:#c0392b">${flagged.length}</div><div class="t">Days at/over ${fmtHrs(BREAK_LIMIT)}</div></div>
     <div class="chip"><div class="n">${people}</div><div class="t">Agents</div></div>
-    <div class="chip"><div class="n">${worst}</div><div class="t">Longest break</div></div>`;
-  const cols=[{k:"date",l:"Day"},{k:"agent",l:"Agent"},{k:"group",l:"Group"},{k:"onbreak",l:"On Break"},{k:"loggedin",l:"Logged In"},{k:"brkpct",l:"Break % of Logged In"}];
+    <div class="chip"><div class="n">${worst}</div><div class="t">Longest Break + Lunch</div></div>`;
+  const cols=[{k:"date",l:"Day"},{k:"agent",l:"Agent"},{k:"group",l:"Group"},{k:"bl",l:"Break + Lunch"},{k:"loggedin",l:"Logged In"},{k:"brkpct",l:"Break+Lunch % of Logged In"}];
   const arrow=k=>BREAK_SORT.col===k?(BREAK_SORT.dir===1?" ▲":" ▼"):"";
   const thead=document.querySelector("#breaksTbl thead");
   thead.innerHTML="<tr>"+cols.map(c=>`<th data-k="${c.k}">${c.l}${arrow(c.k)}</th>`).join("")+"</tr>";
@@ -747,10 +761,10 @@ function renderBreaks(recs){
   const tb=document.querySelector("#breaksTbl tbody");
   tb.innerHTML=flagged.length?flagged.map(r=>`<tr>
     <td>${r.date}</td><td>${r.agent}</td><td>${r.group}</td>
-    <td><span class="pill" style="background:#fdecec;color:#c0392b">${fmtHrs(r.onbreak)}</span></td>
+    <td><span class="pill" style="background:#fdecec;color:#c0392b">${fmtHrs(breakLunch(r))}</span></td>
     <td>${fmtHrs(r.loggedin)}</td>
-    <td>${r.loggedin>0?fmtPct(r.onbreak/r.loggedin*100):"—"}</td></tr>`).join("")
-    :`<tr><td colspan="${cols.length}" class="empty">No breaks over ${fmtHrs(BREAK_LIMIT)} in the current selection.</td></tr>`;
+    <td>${r.loggedin>0?fmtPct(breakLunch(r)/r.loggedin*100):"—"}</td></tr>`).join("")
+    :`<tr><td colspan="${cols.length}" class="empty">No Break + Lunch at/over ${fmtHrs(BREAK_LIMIT)} in the current selection.</td></tr>`;
 }
 
 /* ============ EXPORT ============ */
@@ -758,21 +772,36 @@ function exportExcel(){
   const recs=currentFilter();
   const dim={day:"date",agent:"agent",group:"group",week:"week"}[VIEW];
   const agg=aggregate(recs,dim);
-  const head=[{date:"Day",agent:"Agent",group:"Group",week:"Week"}[dim],"Logged In"]
-    .concat(STATUSES.map(s=>s.label),STATUSES.map(s=>s.label+" %"),["Productive %"]);
-  const body=agg.map(o=>{const row=[o.key,fmtHrs(o.loggedin)];
+  const rowFor=(label,o)=>{const row=[label,fmtHrs(o.loggedin)];
     STATUSES.forEach(s=>row.push(fmtHrs(o[s.key])));
     STATUSES.forEach(s=>row.push(o.loggedin?+(o[s.key]/o.loggedin*100).toFixed(1):0));
-    row.push(+o.util.toFixed(1)); return row;});
+    row.push(+o.util.toFixed(1)); return row;};
+  const firstCol={date:"Day",agent:"Agent",group:"Team / Agent",week:"Week"}[dim];
+  const head=[firstCol,"Logged In"]
+    .concat(STATUSES.map(s=>s.label),STATUSES.map(s=>s.label+" %"),["Productive %"]);
+  let body;
+  if(dim==="group"){
+    // Each team's total row, with its agents listed beneath so coaches get agent-level detail in the same file
+    body=[];
+    agg.sort((a,b)=>String(a.key).localeCompare(String(b.key))).forEach(gr=>{
+      body.push(rowFor(gr.key+" — TEAM TOTAL",gr));
+      aggregate(recs.filter(r=>r.group===gr.key),"agent")
+        .sort((a,b)=>a.util-b.util)
+        .forEach(ag=>body.push(rowFor("    "+ag.key,ag)));
+      body.push([]);   // blank row between teams
+    });
+  } else {
+    body=agg.map(o=>rowFor(o.key,o));
+  }
   const ws=XLSX.utils.aoa_to_sheet([head,...body]);
   const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,"By "+dim);
+  XLSX.utils.book_append_sheet(wb,ws,dim==="group"?"By Team":"By "+dim);
 
-  // Extended Breaks tab: every agent-day over the daily limit in the current selection
-  const brk=currentFilter().filter(r=>r.onbreak>BREAK_LIMIT).sort((a,b)=>a.date.localeCompare(b.date)||b.onbreak-a.onbreak);
-  const brkHead=["Day","Agent","Group","On Break","Logged In","Break % of Logged In"];
-  const brkBody=brk.map(r=>[r.date,r.agent,r.group,fmtHrs(r.onbreak),fmtHrs(r.loggedin),
-    r.loggedin>0?+(r.onbreak/r.loggedin*100).toFixed(1):0]);
+  // Extended Breaks tab: every agent-day where Break + Lunch reached 1:31:00 in the current selection
+  const brk=currentFilter().filter(overBreak).sort((a,b)=>a.date.localeCompare(b.date)||breakLunch(b)-breakLunch(a));
+  const brkHead=["Day","Agent","Group","Break + Lunch","Logged In","Break+Lunch % of Logged In"];
+  const brkBody=brk.map(r=>[r.date,r.agent,r.group,fmtHrs(breakLunch(r)),fmtHrs(r.loggedin),
+    r.loggedin>0?+(breakLunch(r)/r.loggedin*100).toFixed(1):0]);
   const wsB=XLSX.utils.aoa_to_sheet([brkHead,...brkBody]);
   XLSX.utils.book_append_sheet(wb,wsB,"Extended Breaks");
 
