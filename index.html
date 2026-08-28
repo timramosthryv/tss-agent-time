@@ -394,35 +394,45 @@ function parseTs(v){
    Provider "Agent Relogin" events are ignored so the glitch never counts as a real login/logout. */
 function parseSchedule(rows,hi,idx){
   const iTime=idx("Time"), iAgent=idx("Agent"), iGroup=idx("Agent Group"), iStatus=idx("Status"), iCode=idx("Status Code");
-  const byAD=new Map();
+  // Group ALL of an agent's events together (not by calendar date) so a shift that crosses midnight stays one row.
+  const byAgent=new Map();
   for(let r=hi+1;r<rows.length;r++){
     const row=rows[r]; if(!row||!row.length) continue;
     const t=parseTs(row[iTime]); if(!t) continue;
     if(t.date < START_DATE) continue;
     const agent=String(row[iAgent]||"").trim(); if(!agent||isExcluded(agent)) continue;
-    const k=t.date+"|"+agent;
-    let a=byAD.get(k); if(!a){ a={date:t.date, agent, group:cleanGroup(row[iGroup]), ev:[]}; byAD.set(k,a); }
-    a.ev.push({ms:t.ms, hm:t.hm, st:String(row[iStatus]||"").trim(), code:String(row[iCode]||"").trim()});
+    let a=byAgent.get(agent); if(!a){ a={group:cleanGroup(row[iGroup]), ev:[]}; byAgent.set(agent,a); }
+    a.ev.push({date:t.date, ms:t.ms, hm:t.hm, st:String(row[iStatus]||"").trim(), code:String(row[iCode]||"").trim()});
   }
   const out=[];
-  byAD.forEach(a=>{
-    const real=a.ev.filter(e=>e.code.toLowerCase()!=="agent relogin").sort((x,y)=>x.ms-y.ms);  // drop relogin glitch
-    const login=real.find(e=>e.st==="Logged In");
-    let logout=null; for(let i=real.length-1;i>=0;i--){ if(real[i].st==="Logged Out"){ logout=real[i]; break; } }
-    const segs=code=>{ const res=[];
-      for(let i=0;i<real.length;i++){ const e=real[i];
-        if(e.st==="On Break" && e.code.toLowerCase()===code){
-          let end=null; for(let j=i+1;j<real.length;j++){ if(real[j].st!=="On Break"){ end=real[j]; break; } }
-          res.push({out:e.hm, in:end?end.hm:null});
-        } }
-      return res; };
-    const b=segs("break"), l=segs("lunch"), grp=a.group;
-    out.push({date:a.date, agent:a.agent, group:grp, location:(grp.split(" ")[0]||"—"),
-      login:login?login.hm:null, logout:logout?logout.hm:null,
-      b1out:b[0]?b[0].out:null, b1in:b[0]?b[0].in:null,
-      b2out:b[1]?b[1].out:null, b2in:b[1]?b[1].in:null,
-      lout:l[0]?l[0].out:null,  lin:l[0]?l[0].in:null,
-      extra:(b.length>2||l.length>1)});   // flag if there were more than 2 breaks or 1 lunch
+  const dayOff=(base,d)=>Math.round((Date.parse(d)-Date.parse(base))/86400000);   // whole days d is after the shift's start date
+  byAgent.forEach((a,agent)=>{
+    const ev=a.ev.filter(e=>e.code.toLowerCase()!=="agent relogin")               // drop the Agent Relogin glitch
+      .sort((x,y)=> x.date<y.date?-1 : x.date>y.date?1 : x.ms-y.ms);
+    let i=0;
+    while(i<ev.length){
+      while(i<ev.length && ev[i].st!=="Logged In") i++;                            // start a shift at each real Logged In
+      if(i>=ev.length) break;
+      const login=ev[i];
+      let j=i+1; while(j<ev.length && ev[j].st!=="Logged In" && ev[j].st!=="Logged Out") j++;
+      let logout=null, endIdx;
+      if(j<ev.length && ev[j].st==="Logged Out"){ logout=ev[j]; endIdx=j; } else { endIdx=j-1; }  // else: shift left open (no logout)
+      const seg=code=>{ const res=[];
+        for(let k=i;k<=endIdx;k++){ const e=ev[k];
+          if(e.st==="On Break" && e.code.toLowerCase()===code){
+            let end=null; for(let n=k+1;n<ev.length;n++){ if(ev[n].st!=="On Break"){ end=ev[n]; break; } }
+            res.push({out:e, in:end}); } }
+        return res; };
+      const b=seg("break"), l=seg("lunch"), base=login.date;
+      const disp=e=> e? (e.hm + (dayOff(base,e.date)>0?` (+${dayOff(base,e.date)})`:"")) : null;  // add (+1) when a time rolls past midnight
+      out.push({date:login.date, agent, group:a.group, location:(a.group.split(" ")[0]||"—"),
+        login:disp(login), logout:disp(logout),
+        b1out:b[0]?disp(b[0].out):null, b1in:b[0]?disp(b[0].in):null,
+        b2out:b[1]?disp(b[1].out):null, b2in:b[1]?disp(b[1].in):null,
+        lout:l[0]?disp(l[0].out):null,  lin:l[0]?disp(l[0].in):null,
+        extra:(b.length>2||l.length>1)});
+      i=endIdx+1;
+    }
   });
   return out;
 }
