@@ -83,6 +83,8 @@
   tbody tr:hover{background:#fafbfc}
   tbody tr.total{font-weight:800;background:#fbfcfd}
   tbody tr.total td{border-top:2px solid var(--line)}
+  tbody tr.grouprow td{background:#eef2f7;border-top:2px solid #cfd6df;font-size:12.5px}
+  tbody tr.grouprow:hover td{background:#eef2f7}
   .tablescroll{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:12px}
   .tablescroll.sm{max-height:360px}
   .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
@@ -906,28 +908,53 @@ function renderHold(){
   const recs=SCHEDULE.filter(r=> r.holdPct!=null &&
     (q==="ALL"||quarterOf(r.date)===q)&&(m==="ALL"||monthOf(r.date)===m)&&
     (l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
-    (!days||days.has(r.date)))
-    .sort((x,y)=> (y.holdPct-x.holdPct) || x.date.localeCompare(y.date));
+    (!days||days.has(r.date)));
   const cols=["Day","Agent","Group","Hold Time","Logged In → Out","Hold %","Max Continuous Hold"];
   document.querySelector("#holdTbl thead").innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
-  const pctCell=p=>{
+  const pctPill=p=>{
     if(p<=15) return `<span class="pill" style="background:#e6f5ec;color:#1e7a45">${fmtPct(p)}</span>`;
     if(p<=20) return `<span class="pill" style="background:#fef3c7;color:#8a5a00">${fmtPct(p)}</span>`;
     if(p<=25) return `<span class="pill" style="background:#fdecec;color:#c0392b">${fmtPct(p)}</span>`;
     return `<span class="pill" style="background:#7f1d1d;color:#fff;font-weight:800">⚠ ${fmtPct(p)}</span>`;
   };
   const maxCell=s=> s>180 ? `<span style="color:#c0392b;font-weight:700">${fmtHrs(s/3600)}</span>` : fmtHrs(s/3600);
-  document.querySelector("#holdTbl tbody").innerHTML=recs.length?recs.map(r=>`<tr${r.holdPct>25?' style="background:#fff1f1"':''}>
+  const rowHtml=r=>`<tr${r.holdPct>25?' style="background:#fff1f1"':''}>
     <td>${r.date}</td><td>${r.agent}${r.holdPct>25?' <span style="color:#7f1d1d;font-weight:800">ESCALATION</span>':''}</td><td>${r.group}</td>
     <td>${fmtHrs(r.holdSecs/3600)}</td><td>${fmtHrs(r.spanSecs/3600)}</td>
-    <td>${pctCell(r.holdPct)}</td><td>${maxCell(r.maxHold)}</td></tr>`).join("")
-    :`<tr><td colspan="${cols.length}" class="empty">No hold data in the current selection.</td></tr>`;
+    <td>${pctPill(r.holdPct)}</td><td>${maxCell(r.maxHold)}</td></tr>`;
+  const single = a!=="ALL";
+  let html="";
+  if(!recs.length){
+    html=`<tr><td colspan="${cols.length}" class="empty">No hold data in the current selection.</td></tr>`;
+  } else if(single){
+    html=recs.slice().sort((x,y)=>x.date.localeCompare(y.date)).map(rowHtml).join("");   // one agent -> their days in order
+  } else {
+    // All view: group by team (worst team first), then by agent (worst agent first), then by day
+    const byGroup=new Map();
+    recs.forEach(r=>{ const o=byGroup.get(r.group)||{rows:[],hold:0,span:0}; o.rows.push(r); o.hold+=r.holdSecs; o.span+=r.spanSecs; byGroup.set(r.group,o); });
+    const groups=[...byGroup.entries()].map(([grp,o])=>({grp,o,pct:o.span>0?o.hold/o.span*100:0})).sort((x,y)=>y.pct-x.pct);
+    groups.forEach(({grp,o,pct})=>{
+      const byAgent=new Map();
+      o.rows.forEach(r=>{ const p=byAgent.get(r.agent)||{hold:0,span:0}; p.hold+=r.holdSecs; p.span+=r.spanSecs; byAgent.set(r.agent,p); });
+      const aPct=ag=>{ const p=byAgent.get(ag); return p&&p.span>0?p.hold/p.span*100:0; };
+      const rows=o.rows.slice().sort((x,y)=> aPct(y.agent)-aPct(x.agent) || x.agent.localeCompare(y.agent) || x.date.localeCompare(y.date));
+      const over20=o.rows.filter(r=>r.holdPct>20).length, over25=o.rows.filter(r=>r.holdPct>25).length;
+      html += `<tr class="grouprow"><td colspan="3" style="font-weight:800">${grp}</td>
+        <td colspan="2" style="color:var(--ink-soft)">${byAgent.size} agents · ${o.rows.length} days${over20?` · ${over20} over 20%`:""}${over25?` · <b style="color:#7f1d1d">${over25} over 25%</b>`:""}</td>
+        <td>${pctPill(pct)}</td><td></td></tr>`;
+      html += rows.map(rowHtml).join("");
+    });
+  }
+  document.querySelector("#holdTbl tbody").innerHTML=html;
   const over20=recs.filter(r=>r.holdPct>20).length, over25=recs.filter(r=>r.holdPct>25).length;
   const worst=recs.length?fmtPct(Math.max(...recs.map(r=>r.holdPct))):"—";
   $("holdStats").innerHTML=`
     <div class="chip"><div class="n" style="color:#c0392b">${over20}</div><div class="t">Days over 20%</div></div>
     <div class="chip"><div class="n" style="color:#7f1d1d">${over25}</div><div class="t">Days over 25%</div></div>
     <div class="chip"><div class="n">${worst}</div><div class="t">Worst hold %</div></div>`;
+  $("holdHint").textContent = single
+    ? "Client hold time as a % of Logged In to Logged Out, day by day for this agent. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation. Max continuous hold 3:00."
+    : "Client hold time as a % of Logged In to Logged Out. Grouped by team (worst team first), then agent, then day. Pick a Day above to focus one date. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation.";
 }
 
 /* ============ EXPORT ============ */
