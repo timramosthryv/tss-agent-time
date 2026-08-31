@@ -215,6 +215,7 @@
         <div><h3>Hold Time</h3><p class="hint" id="holdHint">Client hold time as a % of Logged In to Logged Out. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation. Max continuous hold 3:00.</p></div>
         <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
           <div class="field"><label>Team</label><select id="holdGroup"></select></div>
+          <div class="field"><label>Agent</label><select id="holdAgent"></select></div>
           <div class="field"><label>Day</label><select id="holdDay"></select></div>
           <div class="agentstats" id="holdStats"></div>
         </div>
@@ -917,12 +918,24 @@ function renderHold(){
     gSel.dataset.init="1";
   }
   const hg=gSel?gSel.value:"ALL", hd=dSel?dSel.value:"ALL";
+  const aSel=$("holdAgent");
+  if(aSel){                                          // Agent picker, scoped to the selected Team; rebuilt only when the team changes
+    if(!aSel.dataset.wired){ aSel.addEventListener("change",renderHold); aSel.dataset.wired="1"; }
+    if(aSel.dataset.team!==hg){
+      const curr=aSel.value;
+      const pool=[...new Set(SCHEDULE.filter(r=>hg==="ALL"||r.group===hg).map(r=>r.agent))].sort();
+      aSel.innerHTML=`<option value="ALL">All Agents</option>`+pool.map(x=>`<option value="${x}">${x}</option>`).join("");
+      aSel.value = pool.includes(curr)?curr:"ALL";
+      aSel.dataset.team=hg;
+    }
+  }
+  const ha=aSel?aSel.value:"ALL";
   const q=val("fQuarter"),m=val("fMonth"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent");
   const days=selectedDays();
   const recs=SCHEDULE.filter(r=> r.holdPct!=null &&
     (q==="ALL"||quarterOf(r.date)===q)&&(m==="ALL"||monthOf(r.date)===m)&&
     (l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
-    (hg==="ALL"||r.group===hg)&&(hd==="ALL"||r.date===hd)&&
+    (hg==="ALL"||r.group===hg)&&(hd==="ALL"||r.date===hd)&&(ha==="ALL"||r.agent===ha)&&
     (!days||days.has(r.date)));
   const cols=["Day","Agent","Group","Hold Time","Logged In → Out","Hold %","Max Continuous Hold"];
   document.querySelector("#holdTbl thead").innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
@@ -937,7 +950,7 @@ function renderHold(){
     <td>${r.date}</td><td>${r.agent}${r.holdPct>25?' <span style="color:#7f1d1d;font-weight:800">ESCALATION</span>':''}</td><td>${r.group}</td>
     <td>${fmtHrs(r.holdSecs/3600)}</td><td>${fmtHrs(r.spanSecs/3600)}</td>
     <td>${pctPill(r.holdPct)}</td><td>${maxCell(r.maxHold)}</td></tr>`;
-  const single = a!=="ALL";
+  const single = a!=="ALL" || ha!=="ALL";   // one agent chosen (top filter or the box's own Agent picker) -> flat day list
   let html="";
   if(!recs.length){
     html=`<tr><td colspan="${cols.length}" class="empty">No hold data in the current selection.</td></tr>`;
