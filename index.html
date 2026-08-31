@@ -208,6 +208,14 @@
       <div class="tablescroll"><table id="schedTbl"><thead></thead><tbody></tbody></table></div>
     </div>
 
+    <div class="panel" id="holdPanel">
+      <div class="phead">
+        <div><h3>Hold Time</h3><p class="hint" id="holdHint">Client hold time as a % of Logged In to Logged Out, per agent per day. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation. Max continuous hold 3:00. Sorted highest first.</p></div>
+        <div class="agentstats" id="holdStats"></div>
+      </div>
+      <div class="tablescroll"><table id="holdTbl"><thead></thead><tbody></tbody></table></div>
+    </div>
+
     <div class="panel" id="agentPanel">
       <div class="phead">
         <div><h3 id="agentDetailTitle">Agent Daily Detail</h3><p class="hint" id="agentDetailHint">Pick a single agent in the Agent filter above to see their day-by-day breakdown.</p></div>
@@ -406,6 +414,7 @@ function parseSchedule(rows,hi,idx){
   }
   const out=[];
   const dayOff=(base,d)=>Math.round((Date.parse(d)-Date.parse(base))/86400000);   // whole days d is after the shift's start date
+  const absSec=e=>Date.parse(e.date)/1000 + e.ms;                                 // absolute seconds, for hold and shift-span math
   byAgent.forEach((a,agent)=>{
     const ev=a.ev.filter(e=>e.code.toLowerCase()!=="agent relogin")               // drop the Agent Relogin glitch
       .sort((x,y)=> x.date<y.date?-1 : x.date>y.date?1 : x.ms-y.ms);
@@ -425,11 +434,19 @@ function parseSchedule(rows,hi,idx){
         return res; };
       const b=seg("break"), l=seg("lunch"), base=login.date;
       const disp=e=> e? (e.hm + (dayOff(base,e.date)>0?` (+${dayOff(base,e.date)})`:"")) : null;  // add (+1) when a time rolls past midnight
+      // Hold time: each Put On Hold -> next Resumed within the shift; track total and the longest single hold
+      let holdSecs=0, maxHold=0;
+      for(let k=i;k<=endIdx;k++){ if(ev[k].st==="Put On Hold"){
+        let res=null; for(let nn=k+1;nn<=endIdx;nn++){ if(ev[nn].st==="Resumed"){ res=ev[nn]; break; } }
+        if(res){ const d=absSec(res)-absSec(ev[k]); if(d>0){ holdSecs+=d; if(d>maxHold) maxHold=d; } } } }
+      const spanSecs=logout?(absSec(logout)-absSec(login)):null;                  // Logged In -> Logged Out elapsed
+      const holdPct=(spanSecs&&spanSecs>0)?holdSecs/spanSecs*100:null;            // hold % of shift span
       out.push({date:login.date, agent, group:a.group, location:(a.group.split(" ")[0]||"—"),
         login:disp(login), logout:disp(logout),
         b1out:b[0]?disp(b[0].out):null, b1in:b[0]?disp(b[0].in):null,
         b2out:b[1]?disp(b[1].out):null, b2in:b[1]?disp(b[1].in):null,
         lout:l[0]?disp(l[0].out):null,  lin:l[0]?disp(l[0].in):null,
+        holdSecs, spanSecs, holdPct, maxHold,
         extra:(b.length>2||l.length>1)});
       i=endIdx+1;
     }
@@ -500,7 +517,11 @@ async function loadFromGitHub(){
 }
 function mergeFiles(list){
   const seen=new Set(); const out=[]; const projectRows=[]; const scheduleRows=[];
+  // Status Change reports are large event logs; if more than one is present (e.g. the Logged In/Out and the with-Hold-Times versions), only the newest one feeds the schedule/hold panels
+  const schedNewest=list.filter(f=>/Agent Status Change/i.test(f.name))
+                        .sort((a,b)=>(parseGen(b.name)||0)-(parseGen(a.name)||0))[0];
   list.forEach(f=>{
+    if(/Agent Status Change/i.test(f.name) && schedNewest && f.name!==schedNewest.name) return;  // skip stale Status Change snapshots
     let parsed; try{parsed=parseWorkbook(f.buf);}catch(e){return;}
     if(parsed.kind==="codes"){ projectRows.push(...parsed.rows); return; }  // By Status Code report – applied after main records
     if(parsed.kind==="schedule"){ scheduleRows.push(...parsed.rows); return; }  // Status Change event log – actual clock times
@@ -649,6 +670,7 @@ function render(){
   renderWatch(recs);
   renderBreaks(recs);
   renderSchedule();
+  renderHold();
   renderAgentDaily();
   status(`${recs.length.toLocaleString()} records · ${new Set(recs.map(r=>r.agent)).size} agents · ${new Set(recs.map(r=>r.date)).size} days`);
 }
@@ -873,6 +895,39 @@ function renderSchedule(){
   $("schedStats").innerHTML=`
     <div class="chip"><div class="n">${recs.length}</div><div class="t">Agent days</div></div>
     <div class="chip"><div class="n">${people}</div><div class="t">Agents</div></div>`;
+}
+function renderHold(){
+  const panel=$("holdPanel"); if(!panel) return;
+  const hasHold=SCHEDULE.some(r=>r.holdPct!=null);
+  panel.style.display = hasHold ? "" : "none";      // only shows once a report carrying hold events is loaded
+  if(!hasHold) return;
+  const q=val("fQuarter"),m=val("fMonth"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent");
+  const days=selectedDays();
+  const recs=SCHEDULE.filter(r=> r.holdPct!=null &&
+    (q==="ALL"||quarterOf(r.date)===q)&&(m==="ALL"||monthOf(r.date)===m)&&
+    (l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
+    (!days||days.has(r.date)))
+    .sort((x,y)=> (y.holdPct-x.holdPct) || x.date.localeCompare(y.date));
+  const cols=["Day","Agent","Group","Hold Time","Logged In → Out","Hold %","Max Continuous Hold"];
+  document.querySelector("#holdTbl thead").innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
+  const pctCell=p=>{
+    if(p<=15) return `<span class="pill" style="background:#e6f5ec;color:#1e7a45">${fmtPct(p)}</span>`;
+    if(p<=20) return `<span class="pill" style="background:#fef3c7;color:#8a5a00">${fmtPct(p)}</span>`;
+    if(p<=25) return `<span class="pill" style="background:#fdecec;color:#c0392b">${fmtPct(p)}</span>`;
+    return `<span class="pill" style="background:#7f1d1d;color:#fff;font-weight:800">⚠ ${fmtPct(p)}</span>`;
+  };
+  const maxCell=s=> s>180 ? `<span style="color:#c0392b;font-weight:700">${fmtHrs(s/3600)}</span>` : fmtHrs(s/3600);
+  document.querySelector("#holdTbl tbody").innerHTML=recs.length?recs.map(r=>`<tr${r.holdPct>25?' style="background:#fff1f1"':''}>
+    <td>${r.date}</td><td>${r.agent}${r.holdPct>25?' <span style="color:#7f1d1d;font-weight:800">ESCALATION</span>':''}</td><td>${r.group}</td>
+    <td>${fmtHrs(r.holdSecs/3600)}</td><td>${fmtHrs(r.spanSecs/3600)}</td>
+    <td>${pctCell(r.holdPct)}</td><td>${maxCell(r.maxHold)}</td></tr>`).join("")
+    :`<tr><td colspan="${cols.length}" class="empty">No hold data in the current selection.</td></tr>`;
+  const over20=recs.filter(r=>r.holdPct>20).length, over25=recs.filter(r=>r.holdPct>25).length;
+  const worst=recs.length?fmtPct(Math.max(...recs.map(r=>r.holdPct))):"—";
+  $("holdStats").innerHTML=`
+    <div class="chip"><div class="n" style="color:#c0392b">${over20}</div><div class="t">Days over 20%</div></div>
+    <div class="chip"><div class="n" style="color:#7f1d1d">${over25}</div><div class="t">Days over 25%</div></div>
+    <div class="chip"><div class="n">${worst}</div><div class="t">Worst hold %</div></div>`;
 }
 
 /* ============ EXPORT ============ */
