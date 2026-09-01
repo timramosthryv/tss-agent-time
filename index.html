@@ -446,14 +446,15 @@ function parseSchedule(rows,hi,idx){
       for(let k=i;k<=endIdx;k++){ if(ev[k].st==="Put On Hold"){
         let res=null; for(let nn=k+1;nn<=endIdx;nn++){ if(ev[nn].st==="Resumed"){ res=ev[nn]; break; } }
         if(res){ const d=absSec(res)-absSec(ev[k]); if(d>0){ holdSecs+=d; if(d>maxHold) maxHold=d; } } } }
-      const spanSecs=logout?(absSec(logout)-absSec(login)):null;                  // Logged In -> Logged Out elapsed
-      const holdPct=(spanSecs&&spanSecs>0)?holdSecs/spanSecs*100:null;            // hold % of shift span
+      const endEv = logout || ev[endIdx];                                         // shift end = logout, or last captured event if the shift ran past the report cutoff
+      const spanSecs = (endEv && endEv!==login) ? (absSec(endEv)-absSec(login)) : null;   // Logged In -> Logged Out (or last activity for a partial day)
+      const holdPct=(spanSecs&&spanSecs>0)?holdSecs/spanSecs*100:null;            // hold % of that span
       out.push({date:login.date, agent, group:a.group, location:(a.group.split(" ")[0]||"—"),
         login:disp(login), logout:disp(logout),
         b1out:b[0]?disp(b[0].out):null, b1in:b[0]?disp(b[0].in):null,
         b2out:b[1]?disp(b[1].out):null, b2in:b[1]?disp(b[1].in):null,
         lout:l[0]?disp(l[0].out):null,  lin:l[0]?disp(l[0].in):null,
-        holdSecs, spanSecs, holdPct, maxHold,
+        holdSecs, spanSecs, holdPct, maxHold, partial:!logout,
         extra:(b.length>2||l.length>1)});
       i=endIdx+1;
     }
@@ -948,7 +949,7 @@ function renderHold(){
   const maxCell=s=> s>180 ? `<span style="color:#c0392b;font-weight:700">${fmtHrs(s/3600)}</span>` : fmtHrs(s/3600);
   const rowHtml=r=>`<tr${r.holdPct>25?' style="background:#fff1f1"':''}>
     <td>${r.date}</td><td>${r.agent}${r.holdPct>25?' <span style="color:#7f1d1d;font-weight:800">ESCALATION</span>':''}</td><td>${r.group}</td>
-    <td>${fmtHrs(r.holdSecs/3600)}</td><td>${fmtHrs(r.spanSecs/3600)}</td>
+    <td>${fmtHrs(r.holdSecs/3600)}</td><td>${fmtHrs(r.spanSecs/3600)}${r.partial?' <span title="Shift ran past the report period; span is time captured so far" style="color:#b45309;font-weight:700">*</span>':''}</td>
     <td>${pctPill(r.holdPct)}</td><td>${maxCell(r.maxHold)}</td></tr>`;
   const single = a!=="ALL" || ha!=="ALL";   // one agent chosen (top filter or the box's own Agent picker) -> flat day list
   let html="";
@@ -980,9 +981,10 @@ function renderHold(){
     <div class="chip"><div class="n" style="color:#c0392b">${over20}</div><div class="t">Days over 20%</div></div>
     <div class="chip"><div class="n" style="color:#7f1d1d">${over25}</div><div class="t">Days over 25%</div></div>
     <div class="chip"><div class="n">${worst}</div><div class="t">Worst hold %</div></div>`;
-  $("holdHint").textContent = single
+  $("holdHint").textContent = (single
     ? "Client hold time as a % of Logged In to Logged Out, day by day for this agent. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation. Max continuous hold 3:00."
-    : "Client hold time as a % of Logged In to Logged Out. Grouped by team (worst team first), then agent, then day. Pick a Day above to focus one date. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation.";
+    : "Client hold time as a % of Logged In to Logged Out. Grouped by team (worst team first), then agent, then day. Pick a Day above to focus one date. Target 15% or lower · 16-20% acceptable · over 20% coaching · over 25% escalation.")
+    + " * marks a partial day whose shift ran past the report period, so its % uses the time captured.";
 }
 
 /* ============ EXPORT ============ */
