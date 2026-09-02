@@ -525,11 +525,20 @@ async function loadFromGitHub(){
 }
 function mergeFiles(list){
   const seen=new Set(); const out=[]; const projectRows=[]; const scheduleRows=[];
-  // Status Change reports are large event logs; if more than one is present (e.g. the Logged In/Out and the with-Hold-Times versions), only the newest one feeds the schedule/hold panels
-  const schedNewest=list.filter(f=>/Agent Status Change/i.test(f.name))
-                        .sort((a,b)=>(parseGen(b.name)||0)-(parseGen(a.name)||0))[0];
+  // Status Change reports are large event logs. Keep the best one PER MONTH (prefer the with-Hold-Times version, then newest generation)
+  // so each month's Attendance/Hold data is retained as new months are uploaded, without double-counting the two report variants.
+  const schedKeep=new Set();
+  { const best=new Map();
+    list.filter(f=>/Agent Status Change/i.test(f.name)).forEach(f=>{
+      const month=(f.name.match(/,\s*([A-Z][a-z]{2}\s+\d{1,2}\s+\d{4})\s*-/)||[])[1]||f.name;   // reporting-period start = the month
+      const hasHold=/with Hold Times/i.test(f.name)?1:0, gen=parseGen(f.name)||0;
+      const cur=best.get(month);
+      if(!cur || hasHold>cur.hasHold || (hasHold===cur.hasHold && gen>cur.gen)) best.set(month,{name:f.name,hasHold,gen});
+    });
+    best.forEach(v=>schedKeep.add(v.name));
+  }
   list.forEach(f=>{
-    if(/Agent Status Change/i.test(f.name) && schedNewest && f.name!==schedNewest.name) return;  // skip stale Status Change snapshots
+    if(/Agent Status Change/i.test(f.name) && !schedKeep.has(f.name)) return;  // keep one Status Change file per month
     let parsed; try{parsed=parseWorkbook(f.buf);}catch(e){return;}
     if(parsed.kind==="codes"){ projectRows.push(...parsed.rows); return; }  // By Status Code report – applied after main records
     if(parsed.kind==="schedule"){ scheduleRows.push(...parsed.rows); return; }  // Status Change event log – actual clock times
