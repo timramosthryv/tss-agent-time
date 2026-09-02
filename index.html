@@ -506,7 +506,9 @@ async function loadFromGitHub(){
   status("Checking repo for latest file…");
   const res=await fetch(API,{cache:"no-store",headers:{Accept:"application/vnd.github+json"}});
   if(!res.ok) throw new Error("data/ list "+res.status);
-  let files=(await res.json()).filter(f=>f.type==="file" && /\.xlsx?$/i.test(f.name));
+  let files=(await res.json()).filter(f=>f.type==="file" && /\.xlsx?$/i.test(f.name) && !/_MONTH\.xlsx?$/i.test(f.name));
+  // MONTH-granularity exports aggregate the whole range into one row per agent (dated the range start) and would
+  // clobber the per-day data for that month, so the dashboard only uses DAY-granularity (and the event-log) reports.
   if(!files.length) throw new Error("No .xlsx files in the data folder.");
   files.forEach(f=>f._gen=parseGen(f.name)||0);
   // Reports are cumulative month-to-date snapshots, so older files for the same period are stale.
