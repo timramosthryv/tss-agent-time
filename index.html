@@ -944,11 +944,18 @@ function renderHold(){
   const ha=aSel?aSel.value:"ALL";
   const q=val("fQuarter"),m=val("fMonth"),l=val("fLoc"),g=val("fGroup"),a=val("fAgent");
   const days=selectedDays();
-  const recs=SCHEDULE.filter(r=> r.holdPct!=null &&
+  const filtered=SCHEDULE.filter(r=>
     (q==="ALL"||quarterOf(r.date)===q)&&(m==="ALL"||monthOf(r.date)===m)&&
     (l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g)&&(a==="ALL"||r.agent===a)&&
     (hg==="ALL"||r.group===hg)&&(hd==="ALL"||r.date===hd)&&(ha==="ALL"||r.agent===ha)&&
     (!days||days.has(r.date)));
+  // Combine an agent's multiple shifts on the same day (e.g. a brief re-login fragment) into one accurate daily
+  // hold row, so a tiny partial fragment can't post a misleadingly high hold %.
+  const _byAD=new Map();
+  filtered.forEach(r=>{ const k=r.date+"|"+r.agent; let o=_byAD.get(k);
+    if(!o){ o={date:r.date,agent:r.agent,group:r.group,location:r.location,holdSecs:0,spanSecs:0,maxHold:0,partial:false}; _byAD.set(k,o); }
+    o.holdSecs+=r.holdSecs||0; o.spanSecs+=r.spanSecs||0; o.maxHold=Math.max(o.maxHold,r.maxHold||0); o.partial=o.partial||!!r.partial; });
+  const recs=[..._byAD.values()].map(o=>{ o.holdPct = o.spanSecs>0 ? o.holdSecs/o.spanSecs*100 : null; return o; }).filter(o=>o.holdPct!=null);
   const cols=["Day","Agent","Group","Hold Time","Logged In → Out","Hold %","Max Continuous Hold"];
   document.querySelector("#holdTbl thead").innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const pctPill=p=>{
