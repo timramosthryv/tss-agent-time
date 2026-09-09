@@ -234,6 +234,7 @@
 
   <footer>
     TSS Agent Time On Status · Times shown in the report time zone · Productive % = (Logged In − Non-Productive Time) ÷ Logged In · Target 75%<br>
+    <span id="trainNote"></span><br>
     <span id="srcNote"></span>
   </footer>
 </div>
@@ -291,6 +292,30 @@ const START_DATE = "2026-08-01";  // dashboard tracks data from this date on; ea
 const EXCLUDE_AGENTS = ["Jorge Davis Volquez", "Genesis Ciriaco Maldonado"];
 const _excludedSet = new Set(EXCLUDE_AGENTS.map(s=>s.trim().toLowerCase()));
 const isExcluded = a => _excludedSet.has(String(a||"").trim().toLowerCase());
+
+// ---- New agents in training ----------------------------------------------------------------
+// Their data still appears on the dashboard (Agent view, Agent Daily Detail, Extended Breaks),
+// but it is left out of every coach / team rollup while they are inside the training window.
+// Counting resumes the day after TRAINING_END. Names must match the 8x8 report exactly.
+// NOTE: the per-record flag is "noCoach", not "training" - "training" is already a status key.
+const TRAINING_START  = "2026-08-17";
+const TRAINING_END    = "2026-11-17";   // inclusive; time counts toward the coach from 2026-11-18
+const TRAINING_AGENTS = [
+  "Grethel Polanco Coradin",
+  "Iris Mateo Perez",
+  "Heidy Baez Santa",
+  "Pabel Lora De Leon",
+  "Ismael Ozuna Gomez",
+  "Kesner Ramirez Ramirez",
+  "Cristhian Rosario Rosario",
+];
+const _trainingSet  = new Set(TRAINING_AGENTS.map(s=>s.trim().toLowerCase()));
+const isTrainee     = a => _trainingSet.has(String(a||"").trim().toLowerCase());
+const isTrainingRec = r => isTrainee(r.agent) && r.date>=TRAINING_START && r.date<=TRAINING_END;
+const countable     = recs => recs.filter(r=>!r.noCoach);   // the records that count toward the coach
+const nextDay       = d => { const t=new Date(d+"T00:00:00Z"); t.setUTCDate(t.getUTCDate()+1); return t.toISOString().slice(0,10); };
+const TRAINING_TAG  = ' <span class="pill" style="background:#eef1f4;color:#5b6470;font-size:10px;font-weight:700">In Training</span>';
+const TRAINING_HINT = " Agents in training through "+TRAINING_END+" are shown but excluded from coach and team rollups.";
 const PROD_HEX = "#0f7a3d";
 const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 
@@ -551,7 +576,7 @@ function mergeFiles(list){
       if(r.date < START_DATE) return;                    // only track data from START_DATE on
       const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
       if(seen.has(k)) return; seen.add(k);
-      r.week=period||weekLabelFor(r.date); r.file=f.name; out.push(r);
+      r.week=period||weekLabelFor(r.date); r.file=f.name; r.noCoach=isTrainingRec(r); out.push(r);
     });
   });
   if(!out.length){
@@ -663,10 +688,11 @@ function aggregate(recs,dim){
     const o=map.get(k);
     STATUSES.forEach(s=>o[s.key]+=r[s.key]);
     o.loggedin+=r.loggedin; o.dates.add(r.date); o.agents.add(r.agent);
+    if(r.noCoach) o.noCoach=true;                    // inside the training window -> not counted for the coach
   });
   let arr=[...map.values()].map(o=>{
     const div=MODE==="avg"?Math.max(1,o.dates.size):1;
-    const res={key:o.key,loggedin:o.loggedin/div,dates:o.dates.size,agents:o.agents.size};
+    const res={key:o.key,loggedin:o.loggedin/div,dates:o.dates.size,agents:o.agents.size,noCoach:!!o.noCoach};
     STATUSES.forEach(s=>res[s.key]=o[s.key]/div);
     res.worked=res.loggedin;
     res.util=res.loggedin>0?(prodHours(res)/res.loggedin*100):0;  // Productive % = productive statuses ÷ Logged In
@@ -680,15 +706,16 @@ function aggregate(recs,dim){
 function render(){
   if(!RECORDS.length) return;
   const recs=currentFilter();
+  const roll=countable(recs);                        // coach-facing rollups drop agents inside their training window
   const dim={day:"date",agent:"agent",group:"group",week:"week"}[VIEW];
-  const agg=aggregate(recs,dim);
-  renderBench(recs);
-  renderKPIs(recs);
+  const agg=aggregate(dim==="agent"?recs:roll,dim);  // Agent view still lists trainees; every other view is a rollup
+  renderBench(roll);
+  renderKPIs(roll);
   renderMain(agg,dim);
-  renderMix(recs);
+  renderMix(roll);
   renderTrend();
   renderTable(agg,dim);
-  renderWatch(recs);
+  renderWatch(roll);
   renderBreaks(recs);
   renderSchedule();
   renderHold();
@@ -760,7 +787,7 @@ function renderMix(recs){
         tooltip:{callbacks:{label:c=>{const s=c.dataset.data.reduce((a,b)=>a+b,0);return `${c.label}: ${fmtHrs(c.parsed)} hrs (${fmtPct(c.parsed/s*100)})`;}}}}}});
 }
 function renderTrend(){
-  const recs=currentFilter(false);                   // ignore day filter to show full trend
+  const recs=countable(currentFilter(false));        // ignore day filter to show full trend; trainees excluded
   const byDay=new Map();
   recs.forEach(r=>{const o=byDay.get(r.date)||{login:0,prod:0}; o.login+=r.loggedin; o.prod+=prodHours(r); byDay.set(r.date,o);});
   const labels=[...byDay.keys()].sort();
@@ -782,7 +809,7 @@ function renderTrend(){
 function renderTable(agg,dim){
   const dimName={date:"Day",agent:"Agent",group:"Group",week:"Week"}[dim];
   $("tableTitle").textContent={date:"Daily Detail",agent:"Agent Detail",group:"Group Detail",week:"Weekly Detail"}[dim];
-  $("tableHint").textContent=(MODE==="avg"?"Avg time/day per status (h:mm:ss)":"Time per status (h:mm:ss)")+" with % of Logged In. Click a header to sort.";
+  $("tableHint").textContent=(MODE==="avg"?"Avg time/day per status (h:mm:ss)":"Time per status (h:mm:ss)")+" with % of Logged In. Click a header to sort."+(dim==="agent"?TRAINING_HINT:"");
   const q=val("search").trim().toLowerCase();
   const cols=[{k:"key",l:dimName},{k:"loggedin",l:"Logged In (Total)"}].concat(DETAIL_STATUSES.map(s=>({k:s.key,l:s.label}))).concat([{k:"util",l:"Productive %"}]);
   const thead=document.querySelector("#tbl thead");
@@ -794,14 +821,15 @@ function renderTable(agg,dim){
   const tb=document.querySelector("#tbl tbody");
   const target=TARGET;
   tb.innerHTML=rows.map(o=>`<tr>
-    <td>${o.key}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
+    <td>${o.key}${o.noCoach?TRAINING_TAG:""}</td><td><b>${fmtHrs(o.loggedin)}</b></td>
     ${DETAIL_STATUSES.map(s=>`<td>${fmtHrs(o[s.key])}${cellPct(o[s.key],o.loggedin)}</td>`).join("")}
     <td><span class="pill" style="background:${o.util>=target?'#e6f5ec':'#fdecec'};color:${o.util>=target?'#1e7a45':'#c0392b'}">${fmtPct(o.util)}</span></td></tr>`).join("")
     || `<tr><td colspan="${cols.length}" class="empty">No rows match.</td></tr>`;
   const t={loggedin:0}; STATUSES.forEach(s=>t[s.key]=0);
-  rows.forEach(o=>{t.loggedin+=o.loggedin;STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
+  const totRows=rows.filter(o=>!o.noCoach);          // trainees are listed above but left out of the total
+  totRows.forEach(o=>{t.loggedin+=o.loggedin;STATUSES.forEach(s=>t[s.key]+=o[s.key]);});
   const tu=t.loggedin>0?(prodHours(t)/t.loggedin*100):0;
-  if(rows.length) tb.innerHTML+=`<tr class="total"><td>Total (${rows.length})</td><td>${fmtHrs(t.loggedin)}</td>
+  if(totRows.length) tb.innerHTML+=`<tr class="total"><td>Total (${totRows.length})</td><td>${fmtHrs(t.loggedin)}</td>
     ${DETAIL_STATUSES.map(s=>`<td>${fmtHrs(t[s.key])}${cellPct(t[s.key],t.loggedin)}</td>`).join("")}<td>${fmtPct(tu)}</td></tr>`;
 }
 function renderAgentDaily(){
@@ -816,8 +844,8 @@ function renderAgentDaily(){
   }
   const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
   const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
-  $("agentDetailTitle").textContent="Agent Daily Detail — "+a;
-  $("agentDetailHint").textContent=`Each day ${a} logged in, with hours per status. Days with no login are not shown.`;
+  $("agentDetailTitle").textContent="Agent Daily Detail — "+a+(isTrainee(a)?"  ·  In Training":"");
+  $("agentDetailHint").textContent=`Each day ${a} logged in, with hours per status. Days with no login are not shown.`+(isTrainee(a)?TRAINING_HINT:"");
   const cols=["Day","Logged In (Total)"].concat(DETAIL_STATUSES.map(s=>s.label)).concat(["Productive %"]);
   thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const byDay=new Map();
@@ -843,7 +871,7 @@ function renderAgentDaily(){
 function renderWatch(recs){
   const target=TARGET;
   const agg=aggregate(recs,"agent").filter(o=>o.loggedin>0 && o.util<target).sort((a,b)=>a.util-b.util);
-  $("watchHint").textContent=`Agents below ${target}% Productive for the current selection (${agg.length}).`;
+  $("watchHint").textContent=`Agents below ${target}% Productive for the current selection (${agg.length}).`+TRAINING_HINT;
   const thead=document.querySelector("#watchTbl thead");
   thead.innerHTML="<tr><th>Agent</th><th>Productive %</th><th>Logged In (Total)</th><th>Productive</th><th>Non-Productive</th></tr>";
   const tb=document.querySelector("#watchTbl tbody");
@@ -1010,8 +1038,9 @@ function renderHold(){
 /* ============ EXPORT ============ */
 function exportExcel(){
   const recs=currentFilter();
+  const roll=countable(recs);                        // team totals exclude agents inside their training window
   const dim={day:"date",agent:"agent",group:"group",week:"week"}[VIEW];
-  const agg=aggregate(recs,dim);
+  const agg=aggregate(dim==="agent"?recs:roll,dim);
   const rowFor=(label,o)=>{const row=[label,fmtHrs(o.loggedin)];
     STATUSES.forEach(s=>row.push(fmtHrs(o[s.key])));
     STATUSES.forEach(s=>row.push(o.loggedin?+(o[s.key]/o.loggedin*100).toFixed(1):0));
@@ -1027,11 +1056,11 @@ function exportExcel(){
       body.push(rowFor(gr.key+" — TEAM TOTAL",gr));
       aggregate(recs.filter(r=>r.group===gr.key),"agent")
         .sort((a,b)=>a.util-b.util)
-        .forEach(ag=>body.push(rowFor("    "+ag.key,ag)));
+        .forEach(ag=>body.push(rowFor("    "+ag.key+(ag.noCoach?"  (In Training)":""),ag)));
       body.push([]);   // blank row between teams
     });
   } else {
-    body=agg.map(o=>rowFor(o.key,o));
+    body=agg.map(o=>rowFor(o.key+(o.noCoach?"  (In Training)":""),o));
   }
   const ws=XLSX.utils.aoa_to_sheet([head,...body]);
   const wb=XLSX.utils.book_new();
@@ -1052,7 +1081,10 @@ function exportExcel(){
 function showDashboard(){
   $("uploadView").classList.add("hide");
   $("dashView").classList.remove("hide");
-  populateFilters(); render();
+  populateFilters();
+  const tn=$("trainNote");
+  if(tn) tn.textContent=`New agents in training (${TRAINING_START} to ${TRAINING_END}) stay visible on the dashboard but are excluded from coach and team rollups. Their time counts toward the coach starting ${nextDay(TRAINING_END)}.`;
+  render();
 }
 function loadBuffer(buf,name){
   try{ mergeFiles([{name:name||"upload.xlsx",buf}]);
@@ -1105,7 +1137,7 @@ async function boot(){
   }
 }
 boot();
-/* build: v3 — added Extended Breaks panel (On Break > 1.5h) */
+/* build: v4 — new agents in training show on the dashboard but do not count toward the coach through 2026-11-17 */
 </script>
 </body>
 </html>
