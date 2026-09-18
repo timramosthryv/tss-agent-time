@@ -293,6 +293,13 @@ const EXCLUDE_AGENTS = ["Jorge Davis Volquez", "Genesis Ciriaco Maldonado"];
 const _excludedSet = new Set(EXCLUDE_AGENTS.map(s=>s.trim().toLowerCase()));
 const isExcluded = a => _excludedSet.has(String(a||"").trim().toLowerCase());
 
+// Groups that belong to another team and must never appear on this dashboard, even if their export
+// lands in the data folder by mistake. Matching records are dropped at load, so the groups do not
+// show up in the filters, the charts, or any rollup. Names are the cleaned group labels.
+const EXCLUDE_GROUPS = ["ClientSuccess Performance", "ClientSuccess AU Performance"];
+const _exGroupSet = new Set(EXCLUDE_GROUPS.map(s=>s.trim().toLowerCase()));
+const isExcludedGroup = g => _exGroupSet.has(String(g||"").trim().toLowerCase());
+
 // ---- New agents in training ----------------------------------------------------------------
 // Their data still appears on the dashboard (Agent view, Agent Daily Detail, Extended Breaks),
 // but it is left out of every coach / team rollup while they are inside the training window.
@@ -574,6 +581,7 @@ function mergeFiles(list){
     const period=parsePeriod(f.name);
     parsed.rows.forEach(r=>{
       if(r.date < START_DATE) return;                    // only track data from START_DATE on
+      if(isExcludedGroup(r.group)) return;               // another team's export that landed in the data folder
       const k=r.date+"|"+r.agent+"|"+(r.id||r.agent);
       if(seen.has(k)) return; seen.add(k);
       r.week=period||weekLabelFor(r.date); r.file=f.name; r.noCoach=isTrainingRec(r); out.push(r);
@@ -585,7 +593,7 @@ function mergeFiles(list){
   }
   RECORDS=out;
   applyCodes(projectRows);
-  SCHEDULE=scheduleRows;
+  SCHEDULE=scheduleRows.filter(r=>!isExcludedGroup(r.group));
   showDashboard();
 }
 // Fill each agent-day's sub-code buckets from the By Status Code report, then compute the
@@ -1137,7 +1145,7 @@ async function boot(){
   }
 }
 boot();
-/* build: v4 — new agents in training show on the dashboard but do not count toward the coach through 2026-11-17 */
+/* build: v5 — ClientSuccess (PCSM) groups excluded from this dashboard at load */
 </script>
 </body>
 </html>
