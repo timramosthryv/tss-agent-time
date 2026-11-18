@@ -320,6 +320,10 @@ const _trainingSet  = new Set(TRAINING_AGENTS.map(s=>s.trim().toLowerCase()));
 const isTrainee     = a => _trainingSet.has(String(a||"").trim().toLowerCase());
 const isTrainingRec = r => isTrainee(r.agent) && r.date>=TRAINING_START && r.date<=TRAINING_END;
 const countable     = recs => recs.filter(r=>!r.noCoach);   // the records that count toward the coach
+// "In Training" label: shown only while the agent is still in the window today. After TRAINING_END the label drops
+// automatically; days inside the window stay out of coach and team rollups, and later days count.
+const _todayLocal   = (()=>{ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); })();
+const inTrainingNow = a => isTrainee(a) && _todayLocal>=TRAINING_START && _todayLocal<=TRAINING_END;
 const nextDay       = d => { const t=new Date(d+"T00:00:00Z"); t.setUTCDate(t.getUTCDate()+1); return t.toISOString().slice(0,10); };
 const TRAINING_TAG  = ' <span class="pill" style="background:#eef1f4;color:#5b6470;font-size:10px;font-weight:700">In Training</span>';
 const TRAINING_HINT = " Agents in training through "+TRAINING_END+" are shown but excluded from coach and team rollups.";
@@ -696,7 +700,7 @@ function aggregate(recs,dim){
     const o=map.get(k);
     STATUSES.forEach(s=>o[s.key]+=r[s.key]);
     o.loggedin+=r.loggedin; o.dates.add(r.date); o.agents.add(r.agent);
-    if(r.noCoach) o.noCoach=true;                    // inside the training window -> not counted for the coach
+    if(!o.lastDate || r.date>=o.lastDate){ o.lastDate=r.date; o.noCoach=!!r.noCoach; }   // label follows the agent's latest day in the selection
   });
   let arr=[...map.values()].map(o=>{
     const div=MODE==="avg"?Math.max(1,o.dates.size):1;
@@ -852,8 +856,8 @@ function renderAgentDaily(){
   }
   const w=val("fWeek"),l=val("fLoc"),g=val("fGroup");
   const recs=RECORDS.filter(r=>r.agent===a && (w==="ALL"||r.week===w)&&(l==="ALL"||r.location===l)&&(g==="ALL"||r.group===g));
-  $("agentDetailTitle").textContent="Agent Daily Detail — "+a+(isTrainee(a)?"  ·  In Training":"");
-  $("agentDetailHint").textContent=`Each day ${a} logged in, with hours per status. Days with no login are not shown.`+(isTrainee(a)?TRAINING_HINT:"");
+  $("agentDetailTitle").textContent="Agent Daily Detail — "+a+(inTrainingNow(a)?"  ·  In Training":"");
+  $("agentDetailHint").textContent=`Each day ${a} logged in, with hours per status. Days with no login are not shown.`+(inTrainingNow(a)?TRAINING_HINT:"");
   const cols=["Day","Logged In (Total)"].concat(DETAIL_STATUSES.map(s=>s.label)).concat(["Productive %"]);
   thead.innerHTML="<tr>"+cols.map(c=>`<th>${c}</th>`).join("")+"</tr>";
   const byDay=new Map();
